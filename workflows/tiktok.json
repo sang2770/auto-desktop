@@ -1,0 +1,113 @@
+{
+    "name": "Quy trình mới",
+    "description": "Quy trình tự động hóa mới.",
+    "schedule": {
+        "enabled": false,
+        "startAt": "",
+        "stopAt": "",
+        "timezone": "Asia/Ho_Chi_Minh"
+    },
+    "settings": {
+        "dryRun": false,
+        "retryCount": 0,
+        "captureOnError": true,
+        "stepDelaySec": 0,
+        "repeat": {
+            "enabled": true,
+            "times": 2,
+            "intervalMs": 6000
+        }
+    },
+    "startSteps": [
+        {
+            "type": "click",
+            "name": "Click chuột",
+            "clickType": "image",
+            "delayBeforeSec": 0,
+            "delayAfterSec": 0,
+            "image": "C:\\Users\\Admin\\AppData\\Roaming\\auto-desktop\\workflows\\images\\crop-click-1783192046564.png",
+            "confidence": 0.8,
+            "timeoutMs": 5000
+        },
+        {
+            "type": "click",
+            "name": "Click chuột Run",
+            "clickType": "coordinate",
+            "delayBeforeSec": 6,
+            "delayAfterSec": 0,
+            "x": 2690,
+            "y": 777
+        },
+        {
+            "type": "wait",
+            "name": "Chờ 1 giây",
+            "ms": 5000
+        },
+        {
+            "type": "click",
+            "name": "Click chuột",
+            "clickType": "image",
+            "delayBeforeSec": 0,
+            "delayAfterSec": 0,
+            "image": "C:\\Users\\Admin\\AppData\\Roaming\\auto-desktop\\workflows\\images\\crop-click-1783192090319.png",
+            "confidence": 0.8,
+            "timeoutMs": 5000
+        },
+        {
+            "type": "click",
+            "name": "Click chuột",
+            "clickType": "coordinate",
+            "x": 2933,
+            "y": 856,
+            "delayBeforeSec": 0,
+            "delayAfterSec": 0
+        },
+        {
+            "type": "wait",
+            "name": "Chờ 1 giây",
+            "ms": 5000
+        },
+        {
+            "type": "click",
+            "name": "Click chuột",
+            "clickType": "image",
+            "delayBeforeSec": 0,
+            "delayAfterSec": 0,
+            "image": "C:\\Users\\Admin\\AppData\\Roaming\\auto-desktop\\workflows\\images\\crop-click-1783193817159.png",
+            "confidence": 0.8,
+            "timeoutMs": 5000
+        },
+        {
+            "type": "click",
+            "name": "Click chuột",
+            "clickType": "image",
+            "delayBeforeSec": 5,
+            "delayAfterSec": 0,
+            "image": "C:\\Users\\Admin\\AppData\\Roaming\\auto-desktop\\workflows\\images\\crop-click-1783193834889.png",
+            "confidence": 0.8,
+            "timeoutMs": 5000
+        },
+        {
+            "type": "wait_for_image",
+            "name": "Đợi ảnh mẫu xuất hiện",
+            "image": "C:\\Users\\Admin\\AppData\\Roaming\\auto-desktop\\workflows\\images\\crop-wait-1783193872610.png",
+            "timeoutMs": 10000,
+            "confidence": 0.8
+        },
+        {
+            "type": "click",
+            "name": "Click chuột",
+            "clickType": "coordinate",
+            "x": 3162,
+            "y": 93,
+            "delayBeforeSec": 0,
+            "delayAfterSec": 0
+        },
+        {
+            "type": "wait",
+            "name": "Chờ 1 giây",
+            "ms": 12000
+        }
+    ],
+    "stopSteps": []
+}

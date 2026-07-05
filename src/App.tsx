@@ -83,7 +83,8 @@ function StepCard({
   onMoveUp,
   onMoveDown,
   isFirst,
-  isLast
+  isLast,
+  savedWorkflows
 }: {
   step: Step;
   index: number;
@@ -93,6 +94,7 @@ function StepCard({
   onMoveDown: () => void;
   isFirst: boolean;
   isLast: boolean;
+  savedWorkflows: string[];
 }) {
   const isSeconds = step.type === "wait" && step.ms % 1000 === 0;
   const [waitUnit, setWaitUnit] = useState<"s" | "ms">(isSeconds ? "s" : "ms");
@@ -205,7 +207,7 @@ function StepCard({
     }
   }, [condClickCountdown]);
 
-  function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>, fieldName: "image" | "clickImage") {
+  function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>, fieldName: "image" | "clickImage" | "stopImage") {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -239,6 +241,11 @@ function StepCard({
             {step.type === "wait_for_image" && "Đợi ảnh"}
             {step.type === "check_text" && "Xem chữ"}
             {step.type === "conditional" && "Kiểm tra (IF)"}
+            {step.type === "run_workflow" && "Chạy Flow Con"}
+            {step.type === "conditional_workflow" && "Rẽ Nhánh Flow"}
+            {step.type === "check_interval" && "Lặp Chu Kỳ"}
+            {step.type === "clear_interval" && "Dừng Chu Kỳ"}
+            {step.type === "press_key" && "Nhấn Phím"}
           </span>
           <input
             type="text"
@@ -300,6 +307,16 @@ function StepCard({
                   clickX: 0,
                   clickY: 0
                 });
+              } else if (newType === "run_workflow") {
+                onUpdate({ type: "run_workflow", name: step.name, workflowPath: "" });
+              } else if (newType === "conditional_workflow") {
+                onUpdate({ type: "conditional_workflow", name: step.name, conditionType: "image", image: "", confidence: 0.8, thenWorkflowPath: "", elseWorkflowPath: "" });
+              } else if (newType === "check_interval") {
+                onUpdate({ type: "check_interval", name: step.name, intervalId: "loop1", intervalSec: 5, actionWorkflowPath: "", stopConditionType: "image", stopImage: "", stopConfidence: 0.8 });
+              } else if (newType === "clear_interval") {
+                onUpdate({ type: "clear_interval", name: step.name, intervalId: "loop1" });
+              } else if (newType === "press_key") {
+                onUpdate({ type: "press_key", name: step.name, key: "f5" });
               }
             }}
           >
@@ -310,6 +327,11 @@ function StepCard({
             <option value="wait_for_image">Chờ hình ảnh xuất hiện (Wait Image)</option>
             <option value="check_text">Kiểm tra chữ trên màn hình (Check Text)</option>
             <option value="conditional">Kiểm tra điều kiện (Nếu xuất hiện thì làm gì...)</option>
+            <option value="run_workflow">Chạy workflow con (Sub-flow)</option>
+            <option value="conditional_workflow">Rẽ nhánh workflow theo điều kiện (If-Else Flow)</option>
+            <option value="check_interval">Kiểm tra lặp chu kỳ (Check Interval)</option>
+            <option value="clear_interval">Xoá lặp chu kỳ (Clear Interval)</option>
+            <option value="press_key">Nhấn phím bàn phím (Press Key)</option>
           </select>
         </div>
 
@@ -860,6 +882,303 @@ function StepCard({
           </>
         )}
 
+        {step.type === "run_workflow" && (
+          <div className="form-group">
+            <label>Chọn workflow con để chạy</label>
+            <select
+              value={step.workflowPath}
+              onChange={(e) => onUpdate({ ...step, workflowPath: e.target.value })}
+            >
+              <option value="">-- Chọn workflow --</option>
+              {savedWorkflows.map((path) => (
+                <option key={path} value={path}>
+                  {path.split(/[/\\]/).pop() || path}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {step.type === "conditional_workflow" && (
+          <>
+            <div className="form-grid">
+              <div className="form-group">
+                <label>Nếu thấy (Điều kiện)</label>
+                <select
+                  value={step.conditionType}
+                  onChange={(e) => {
+                    const condType = e.target.value as "image" | "text";
+                    onUpdate({
+                      ...step,
+                      conditionType: condType,
+                      image: condType === "image" ? "" : undefined,
+                      confidence: condType === "image" ? 0.8 : undefined,
+                      text: condType === "text" ? "" : undefined
+                    } as Step);
+                  }}
+                >
+                  <option value="image">Hình ảnh xuất hiện</option>
+                  <option value="text">Chữ xuất hiện trên màn hình</option>
+                </select>
+              </div>
+
+              {step.conditionType === "image" && (
+                <div className="form-group">
+                  <label>Độ tin cậy khớp: {step.confidence ?? 0.8}</label>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="1"
+                    step="0.05"
+                    value={step.confidence ?? 0.8}
+                    onChange={(e) => onUpdate({ ...step, confidence: parseFloat(e.target.value) } as Step)}
+                  />
+                </div>
+              )}
+            </div>
+
+            {step.conditionType === "image" ? (
+              <div className="image-upload-wrapper form-section" style={{ border: "none", margin: 0, padding: 0 }}>
+                <div className="form-group">
+                  <label>Ảnh mẫu điều kiện cần xuất hiện</label>
+                  <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
+                    <div className="image-upload-box" style={{ flex: 1 }}>
+                      <span className="image-upload-text">📁 Chọn file ảnh</span>
+                      <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, "image")} />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const res = await desktopApi.captureRegion();
+                        if (res) {
+                          if (isElectronDesktopApi) {
+                            const path = await desktopApi.saveImage({ name: "crop-cond-flow.png", base64: res.base64 });
+                            onUpdate({ ...step, image: path });
+                          } else {
+                            onUpdate({ ...step, image: res.base64 });
+                          }
+                        }
+                      }}
+                      style={{ background: "rgba(255,255,255,0.06)", border: "1px dashed rgba(255,255,255,0.2)" }}
+                    >
+                      📷 Chụp trực tiếp
+                    </button>
+                  </div>
+                </div>
+                <ImagePreview filePath={step.image} />
+              </div>
+            ) : (
+              <div className="form-group">
+                <label>Nhập chữ cần tìm kiếm</label>
+                <input
+                  type="text"
+                  value={step.text ?? ""}
+                  onChange={(e) => onUpdate({ ...step, text: e.target.value } as Step)}
+                  placeholder="e.g. Lỗi kết nối"
+                />
+              </div>
+            )}
+
+            <div className="form-grid" style={{ marginTop: "12px", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "12px" }}>
+              <div className="form-group">
+                <label>Nếu ĐÚNG (Thì chạy Flow)</label>
+                <select
+                  value={step.thenWorkflowPath ?? ""}
+                  onChange={(e) => onUpdate({ ...step, thenWorkflowPath: e.target.value })}
+                >
+                  <option value="">-- Chọn workflow --</option>
+                  {savedWorkflows.map((path) => (
+                    <option key={path} value={path}>
+                      {path.split(/[/\\]/).pop() || path}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label>Nếu SAI (Thì chạy Flow - Không bắt buộc)</label>
+                <select
+                  value={step.elseWorkflowPath ?? ""}
+                  onChange={(e) => onUpdate({ ...step, elseWorkflowPath: e.target.value })}
+                >
+                  <option value="">-- Chọn workflow (bỏ qua nếu không cần) --</option>
+                  {savedWorkflows.map((path) => (
+                    <option key={path} value={path}>
+                      {path.split(/[/\\]/).pop() || path}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </>
+        )}
+
+        {step.type === "check_interval" && (
+          <>
+            <div className="form-grid">
+              <div className="form-group">
+                <label>Mã chu kỳ (Interval ID)</label>
+                <input
+                  type="text"
+                  value={step.intervalId}
+                  onChange={(e) => onUpdate({ ...step, intervalId: e.target.value })}
+                  placeholder="e.g. check_popup"
+                />
+              </div>
+
+              <div className="form-group">
+                <label>Chu kỳ kiểm tra (giây)</label>
+                <input
+                  type="number"
+                  value={step.intervalSec}
+                  onChange={(e) => onUpdate({ ...step, intervalSec: parseFloat(e.target.value) || 5 })}
+                />
+              </div>
+            </div>
+
+            <div className="form-group" style={{ marginTop: "8px" }}>
+              <label>Workflow thực hiện trong chu kỳ</label>
+              <select
+                value={step.actionWorkflowPath ?? ""}
+                onChange={(e) => onUpdate({ ...step, actionWorkflowPath: e.target.value })}
+              >
+                <option value="">-- Chọn workflow thực hiện --</option>
+                {savedWorkflows.map((path) => (
+                  <option key={path} value={path}>
+                    {path.split(/[/\\]/).pop() || path}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="form-grid" style={{ marginTop: "12px", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "12px" }}>
+              <div className="form-group">
+                <label>Điều kiện TỰ ĐỘNG DỪNG (Clear Interval)</label>
+                <select
+                  value={step.stopConditionType ?? "image"}
+                  onChange={(e) => {
+                    const condType = e.target.value as "image" | "text";
+                    onUpdate({
+                      ...step,
+                      stopConditionType: condType,
+                      stopImage: condType === "image" ? "" : undefined,
+                      stopConfidence: condType === "image" ? 0.8 : undefined,
+                      stopText: condType === "text" ? "" : undefined
+                    } as Step);
+                  }}
+                >
+                  <option value="image">Khi thấy hình ảnh</option>
+                  <option value="text">Khi thấy chữ xuất hiện</option>
+                </select>
+              </div>
+
+              {step.stopConditionType === "image" && (
+                <div className="form-group">
+                  <label>Độ tin cậy khớp dừng: {step.stopConfidence ?? 0.8}</label>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="1"
+                    step="0.05"
+                    value={step.stopConfidence ?? 0.8}
+                    onChange={(e) => onUpdate({ ...step, stopConfidence: parseFloat(e.target.value) } as Step)}
+                  />
+                </div>
+              )}
+            </div>
+
+            {step.stopConditionType === "image" ? (
+              <div className="image-upload-wrapper form-section" style={{ border: "none", margin: 0, padding: 0 }}>
+                <div className="form-group">
+                  <label>Ảnh mẫu điều kiện dừng</label>
+                  <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
+                    <div className="image-upload-box" style={{ flex: 1 }}>
+                      <span className="image-upload-text">📁 Chọn file ảnh</span>
+                      <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, "stopImage")} />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const res = await desktopApi.captureRegion();
+                        if (res) {
+                          if (isElectronDesktopApi) {
+                            const path = await desktopApi.saveImage({ name: "crop-stop-interval.png", base64: res.base64 });
+                            onUpdate({ ...step, stopImage: path });
+                          } else {
+                            onUpdate({ ...step, stopImage: res.base64 });
+                          }
+                        }
+                      }}
+                      style={{ background: "rgba(255,255,255,0.06)", border: "1px dashed rgba(255,255,255,0.2)" }}
+                    >
+                      📷 Chụp trực tiếp
+                    </button>
+                  </div>
+                </div>
+                <ImagePreview filePath={step.stopImage} />
+              </div>
+            ) : (
+              <div className="form-group">
+                <label>Nhập chữ điều kiện dừng</label>
+                <input
+                  type="text"
+                  value={step.stopText ?? ""}
+                  onChange={(e) => onUpdate({ ...step, stopText: e.target.value } as Step)}
+                  placeholder="e.g. Thành công"
+                />
+              </div>
+            )}
+          </>
+        )}
+
+        {step.type === "clear_interval" && (
+          <div className="form-group">
+            <label>Mã chu kỳ cần dừng (Interval ID)</label>
+            <input
+              type="text"
+              value={step.intervalId}
+              onChange={(e) => onUpdate({ ...step, intervalId: e.target.value })}
+              placeholder="e.g. check_popup, nhập 'all' để dừng toàn bộ"
+            />
+          </div>
+        )}
+
+        {step.type === "press_key" && (
+          <div className="form-grid">
+            <div className="form-group">
+              <label>Phím cần nhấn</label>
+              <select
+                value={["f5", "enter", "space", "escape", "tab", "backspace"].includes(step.key.toLowerCase()) ? step.key.toLowerCase() : "custom"}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  onUpdate({ ...step, key: val === "custom" ? "" : val });
+                }}
+              >
+                <option value="f5">F5 (Reload/Refresh)</option>
+                <option value="enter">Enter</option>
+                <option value="space">Space (Khoảng trắng)</option>
+                <option value="escape">Escape (ESC)</option>
+                <option value="tab">Tab</option>
+                <option value="backspace">Backspace (Xoá ngược)</option>
+                <option value="custom">Tự nhập phím khác...</option>
+              </select>
+            </div>
+
+            {/* Custom key input if custom is selected */}
+            {!["f5", "enter", "space", "escape", "tab", "backspace"].includes(step.key.toLowerCase()) && (
+              <div className="form-group">
+                <label>Nhập tên phím (e.g. f11, a, ctrl, shift)</label>
+                <input
+                  type="text"
+                  value={step.key}
+                  onChange={(e) => onUpdate({ ...step, key: e.target.value })}
+                  placeholder="e.g. f11, a, alt"
+                />
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Region config common helper for visual steps */}
         {("region" in step) && (
           <div className="form-section" style={{ border: "none", margin: 0, padding: 0 }}>
@@ -1112,6 +1431,16 @@ function App() {
       newStep = { type: "wait_for_image", name: "Đợi ảnh mẫu xuất hiện", image: "", timeoutMs: 5000, confidence: 0.8 };
     } else if (type === "check_text") {
       newStep = { type: "check_text", name: "Kiểm tra chữ màn hình", text: "", timeoutMs: 5000 };
+    } else if (type === "run_workflow") {
+      newStep = { type: "run_workflow", name: "Chạy workflow con", workflowPath: "" };
+    } else if (type === "conditional_workflow") {
+      newStep = { type: "conditional_workflow", name: "Rẽ nhánh workflow", conditionType: "image", image: "", confidence: 0.8, thenWorkflowPath: "", elseWorkflowPath: "" };
+    } else if (type === "check_interval") {
+      newStep = { type: "check_interval", name: "Lặp chu kỳ kiểm tra", intervalId: "loop_" + Math.random().toString(36).substr(2, 5), intervalSec: 5, actionWorkflowPath: "", stopConditionType: "image", stopImage: "", stopConfidence: 0.8 };
+    } else if (type === "clear_interval") {
+      newStep = { type: "clear_interval", name: "Dừng lặp chu kỳ", intervalId: "" };
+    } else if (type === "press_key") {
+      newStep = { type: "press_key", name: "Nhấn phím bàn phím", key: "f5" };
     } else {
       newStep = {
         type: "conditional",
@@ -1554,6 +1883,7 @@ function App() {
                         onMoveDown={() => handleMoveStep(idx, "down")}
                         isFirst={idx === 0}
                         isLast={idx === workflow.startSteps.length - 1}
+                        savedWorkflows={savedWorkflows}
                       />
                     ))}
 
@@ -1587,6 +1917,21 @@ function App() {
                       </button>
                       <button type="button" onClick={() => handleAddStep("conditional")} style={{ background: "rgba(233, 30, 99, 0.15)", borderColor: "rgba(233, 30, 99, 0.3)" }}>
                         + Kiểm tra (IF)
+                      </button>
+                      <button type="button" onClick={() => handleAddStep("run_workflow")} style={{ background: "rgba(168, 85, 247, 0.15)", borderColor: "rgba(168, 85, 247, 0.3)" }}>
+                        + Chạy Flow Con
+                      </button>
+                      <button type="button" onClick={() => handleAddStep("conditional_workflow")} style={{ background: "rgba(219, 39, 119, 0.15)", borderColor: "rgba(219, 39, 119, 0.3)" }}>
+                        + Rẽ Nhánh Flow
+                      </button>
+                      <button type="button" onClick={() => handleAddStep("check_interval")} style={{ background: "rgba(6, 182, 212, 0.15)", borderColor: "rgba(6, 182, 212, 0.3)" }}>
+                        + Lặp Chu Kỳ
+                      </button>
+                      <button type="button" onClick={() => handleAddStep("clear_interval")} style={{ background: "rgba(239, 68, 68, 0.15)", borderColor: "rgba(239, 68, 68, 0.3)" }}>
+                        + Dừng Chu Kỳ
+                      </button>
+                      <button type="button" onClick={() => handleAddStep("press_key")} style={{ background: "rgba(249, 115, 22, 0.15)", borderColor: "rgba(249, 115, 22, 0.3)" }}>
+                        + Nhấn Phím
                       </button>
                     </div>
                   </div>
@@ -1649,6 +1994,11 @@ function App() {
                               {step.type === "wait_for_image" && "Đợi hình ảnh"}
                               {step.type === "check_text" && `Kiểm tra chữ: "${step.text}"`}
                               {step.type === "conditional" && `Kiểm tra: Nếu thấy ${step.conditionType === "image" ? "ảnh" : `chữ "${step.text}"`} thì ${step.actionType}`}
+                              {step.type === "run_workflow" && `Chạy Flow Con: ${step.workflowPath ? (step.workflowPath.split(/[/\\]/).pop() || step.workflowPath) : "(Chưa chọn)"}`}
+                              {step.type === "conditional_workflow" && `Rẽ Nhánh Flow: Nếu thấy ${step.conditionType === "image" ? "ảnh" : `chữ "${step.text}"`} thì chạy Flow Con`}
+                              {step.type === "check_interval" && `Lặp Chu Kỳ: Chạy mỗi ${step.intervalSec}s cho đến khi dừng`}
+                              {step.type === "clear_interval" && `Dừng Chu Kỳ: ${step.intervalId || "(Chưa nhập ID)"}`}
+                              {step.type === "press_key" && `Nhấn phím: ${step.key.toUpperCase()}`}
                             </p>
                           </div>
                         </li>

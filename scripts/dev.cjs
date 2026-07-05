@@ -23,7 +23,7 @@ async function findReadyRendererUrl() {
 function run(command, args) {
   const child = spawn(command, args, {
     stdio: "inherit",
-    shell: false,
+    shell: process.platform === "win32",
     env: process.env
   });
 
@@ -42,13 +42,27 @@ async function main() {
   }
 
   console.log("[dev] No dev server detected. Launching Vite and Electron together.");
-  const concurrent = run("npx", [
-    "concurrently",
-    "-k",
-    "npm:dev:renderer",
-    "npm run dev:electron -- http://localhost:5173"
-  ]);
-  concurrent.on("exit", (code) => process.exit(code ?? 0));
+  
+  const renderer = run("npm", ["run", "dev:renderer"]);
+  const electron = run("npm", ["run", "dev:electron", "--", "http://localhost:5173"]);
+
+  let exited = false;
+  const handleExit = (code) => {
+    if (exited) return;
+    exited = true;
+    try {
+      renderer.kill();
+    } catch {}
+    try {
+      electron.kill();
+    } catch {}
+    process.exit(code ?? 0);
+  };
+
+  renderer.on("exit", handleExit);
+  electron.on("exit", handleExit);
+  renderer.on("error", () => handleExit(1));
+  electron.on("error", () => handleExit(1));
 }
 
 main().catch((error) => {

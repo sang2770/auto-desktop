@@ -79,7 +79,62 @@ export type ConditionalStep = {
   waitMs?: number;
 };
 
-export type Step = ClickStep | DoubleClickStep | WaitStep | WaitForImageStep | CheckTextStep | LaunchAppStep | ConditionalStep;
+export type RunWorkflowStep = {
+  type: "run_workflow";
+  name: string;
+  workflowPath: string;
+};
+
+export type ConditionalWorkflowStep = {
+  type: "conditional_workflow";
+  name: string;
+  conditionType: "image" | "text";
+  image?: string;
+  confidence?: number;
+  text?: string;
+  region?: [number, number, number, number];
+  thenWorkflowPath?: string;
+  elseWorkflowPath?: string;
+};
+
+export type CheckIntervalStep = {
+  type: "check_interval";
+  name: string;
+  intervalId: string;
+  intervalSec: number;
+  actionWorkflowPath?: string;
+  stopConditionType?: "image" | "text";
+  stopImage?: string;
+  stopConfidence?: number;
+  stopText?: string;
+  stopRegion?: [number, number, number, number];
+};
+
+export type ClearIntervalStep = {
+  type: "clear_interval";
+  name: string;
+  intervalId: string;
+};
+
+export type PressKeyStep = {
+  type: "press_key";
+  name: string;
+  key: string;
+};
+
+export type Step =
+  | ClickStep
+  | DoubleClickStep
+  | WaitStep
+  | WaitForImageStep
+  | CheckTextStep
+  | LaunchAppStep
+  | ConditionalStep
+  | RunWorkflowStep
+  | ConditionalWorkflowStep
+  | CheckIntervalStep
+  | ClearIntervalStep
+  | PressKeyStep;
 
 export type Workflow = {
   name: string;

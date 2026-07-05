@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import pyautogui
 import argparse
 import ctypes
 import json
@@ -11,7 +12,20 @@ from datetime import datetime
 from typing import Any
 from typing import cast
 from zoneinfo import ZoneInfo
+import threading
+import os
 
+if sys.platform == "win32":
+    import win32api
+    import win32con
+
+import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 
 def log(message: str) -> None:
     print(f"[{datetime.now().isoformat(timespec='seconds')}] {message}")
@@ -234,30 +248,39 @@ def perform_darwin_click(x: int, y: int, click_count: int = 1, button: str = "le
 
     return True, "quartz"
 
+def perform_click(pyautogui, x, y, button="left"):
+    screen_x = int(x)
+    screen_y = int(y)
 
-def perform_click(pyautogui: Any, x: Any, y: Any, button: str = "left") -> tuple[int, int, str]:
-    screen_x = to_screen_int(x)
-    screen_y = to_screen_int(y)
-    frontmost_before = get_frontmost_app_name()
-    darwin_success, backend = perform_darwin_click(screen_x, screen_y, click_count=1, button=button)
+    if sys.platform == "win32":
+        win32api.SetCursorPos((screen_x, screen_y))
+        time.sleep(0.03)
+
+        if button == "right":
+            win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTDOWN, 0, 0)
+            time.sleep(0.03)
+            win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTUP, 0, 0)
+            backend = "pywin32"
+        else:
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0)
+            time.sleep(0.03)
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0)
+            backend = "pywin32"
+
+        return screen_x, screen_y, backend
+
+    # macOS
+    darwin_success, backend = perform_darwin_click(
+        screen_x,
+        screen_y,
+        click_count=1,
+        button=button,
+    )
+
     if not darwin_success:
-        pyautogui.moveTo(screen_x, screen_y)
-        pyautogui.mouseDown(x=screen_x, y=screen_y, button=button)
-        time.sleep(0.07)
-        pyautogui.mouseUp(x=screen_x, y=screen_y, button=button)
-        backend = f"pyautogui-fallback:{backend}"
-    frontmost_after = get_frontmost_app_name()
-    if should_repeat_after_focus_change(frontmost_before, frontmost_after):
-        log(f"Focus changed during click: {frontmost_before} -> {frontmost_after}. Repeating click at same point.")
-        time.sleep(0.2)
-        retry_success, retry_backend = perform_darwin_click(screen_x, screen_y, click_count=1, button=button)
-        if not retry_success:
-            pyautogui.moveTo(screen_x, screen_y)
-            pyautogui.mouseDown(x=screen_x, y=screen_y, button=button)
-            time.sleep(0.07)
-            pyautogui.mouseUp(x=screen_x, y=screen_y, button=button)
-            retry_backend = f"pyautogui-fallback:{retry_backend}"
-        backend = f"{backend}+focus-retry:{retry_backend}"
+        pyautogui.click(x=screen_x, y=screen_y, button=button)
+        backend = f"pyautogui:{backend}"
+
     return screen_x, screen_y, backend
 
 
@@ -715,7 +738,202 @@ def step_conditional(step: dict[str, Any], dry_run: bool) -> None:
         log("Condition NOT met. Skipping action.")
 
 
-def execute_step_list(steps: list[dict[str, Any]], dry_run: bool, label: str, step_delay: float = 0.0) -> None:
+gui_lock = threading.RLock()
+active_intervals = {}
+intervals_lock = threading.Lock()
+
+def step_run_workflow(step: dict[str, Any], dry_run: bool, depth: int) -> None:
+    workflow_path = step.get("workflowPath")
+    if not workflow_path:
+        log("No workflowPath specified. Skipping.")
+        return
+        
+    if depth > 10:
+        raise RuntimeError(f"Max workflow nesting depth (10) exceeded at {workflow_path}")
+        
+    log(f"Executing sub-workflow: {workflow_path}")
+    if not os.path.exists(workflow_path):
+        raise FileNotFoundError(f"Sub-workflow file not found: {workflow_path}")
+        
+    with open(workflow_path, "r", encoding="utf-8") as f:
+        sub_wf = json.load(f)
+        
+    sub_settings = sub_wf.get("settings", {})
+    sub_dry_run = dry_run
+    sub_step_delay = float(sub_settings.get("stepDelaySec", 0))
+    
+    sub_start_steps = sub_wf.get("startSteps", [])
+    sub_stop_steps = sub_wf.get("stopSteps", [])
+    
+    execute_step_list(sub_start_steps, sub_dry_run, f"sub-flow start ({os.path.basename(workflow_path)})", sub_step_delay, depth + 1)
+    execute_step_list(sub_stop_steps, sub_dry_run, f"sub-flow stop ({os.path.basename(workflow_path)})", sub_step_delay, depth + 1)
+
+def step_conditional_workflow(step: dict[str, Any], dry_run: bool, depth: int) -> None:
+    condition_type = step.get("conditionType", "image")
+    region = step.get("region")
+    condition_met = False
+
+    if condition_type == "image":
+        image = step.get("image")
+        confidence = step.get("confidence", 0.8)
+        if not image:
+            log("Condition check skipped: No image path provided")
+            return
+        
+        if dry_run:
+            log(f"DRY RUN condition check for image: {image} confidence={confidence}")
+            condition_met = True
+        else:
+            try:
+                import pyautogui
+                with gui_lock:
+                    match, _ = safe_locate_on_screen(pyautogui, image, confidence=confidence, region=region)
+                condition_met = match is not None
+            except Exception as err:
+                log(f"Error checking condition image: {err}")
+    else:
+        text = step.get("text")
+        if not text:
+            log("Condition check skipped: No check text provided")
+            return
+        
+        if dry_run:
+            log(f"DRY RUN condition check for text: '{text}'")
+            condition_met = True
+        else:
+            try:
+                import pyautogui
+                import pytesseract
+                with gui_lock:
+                    screenshot = pyautogui.screenshot(region=tuple(region) if region else None)
+                extracted = pytesseract.image_to_string(screenshot)
+                condition_met = text.lower() in extracted.lower()
+            except Exception as err:
+                log(f"Error checking condition text: {err}")
+
+    if condition_met:
+        then_path = step.get("thenWorkflowPath")
+        if then_path:
+            log(f"Condition MET. Running THEN workflow: {then_path}")
+            step_run_workflow({"workflowPath": then_path}, dry_run, depth)
+        else:
+            log("Condition MET, but no thenWorkflowPath specified.")
+    else:
+        else_path = step.get("elseWorkflowPath")
+        if else_path:
+            log(f"Condition NOT met. Running ELSE workflow: {else_path}")
+            step_run_workflow({"workflowPath": else_path}, dry_run, depth)
+        else:
+            log("Condition NOT met, and no elseWorkflowPath specified. Skipping.")
+
+def step_check_interval(step: dict[str, Any], dry_run: bool) -> None:
+    interval_id = step.get("intervalId")
+    if not interval_id:
+        log("No intervalId specified. Skipping check_interval step.")
+        return
+        
+    with intervals_lock:
+        if interval_id in active_intervals:
+            log(f"Interval {interval_id} is already running. Stopping it first.")
+            active_intervals[interval_id]["stop_event"].set()
+            time.sleep(0.5)
+
+        stop_event = threading.Event()
+        t = threading.Thread(
+            target=interval_worker,
+            args=(interval_id, step, dry_run, stop_event),
+            daemon=True
+        )
+        active_intervals[interval_id] = {
+            "thread": t,
+            "stop_event": stop_event
+        }
+        t.start()
+
+def interval_worker(interval_id: str, step: dict[str, Any], dry_run: bool, stop_event: threading.Event) -> None:
+    interval_sec = float(step.get("intervalSec", 5))
+    action_workflow_path = step.get("actionWorkflowPath")
+    
+    stop_cond_type = step.get("stopConditionType")
+    stop_image = step.get("stopImage")
+    stop_confidence = float(step.get("stopConfidence", 0.8))
+    stop_text = step.get("stopText")
+    stop_region = step.get("stopRegion")
+    
+    log(f"[Interval {interval_id}] Worker thread started. Interval: {interval_sec}s")
+    
+    while not stop_event.is_set():
+        condition_met = False
+        if stop_cond_type == "image" and stop_image:
+            if dry_run:
+                log(f"[Interval {interval_id}] DRY RUN stop condition check for image: {stop_image}")
+                condition_met = True
+            else:
+                try:
+                    import pyautogui
+                    with gui_lock:
+                        match, _ = safe_locate_on_screen(pyautogui, stop_image, confidence=stop_confidence, region=stop_region)
+                    condition_met = match is not None
+                except Exception as err:
+                    log(f"[Interval {interval_id}] Error checking stop image: {err}")
+        elif stop_cond_type == "text" and stop_text:
+            if dry_run:
+                log(f"[Interval {interval_id}] DRY RUN stop condition check for text: '{stop_text}'")
+                condition_met = True
+            else:
+                try:
+                    import pyautogui
+                    import pytesseract
+                    with gui_lock:
+                        screenshot = pyautogui.screenshot(region=tuple(stop_region) if stop_region else None)
+                    extracted = pytesseract.image_to_string(screenshot)
+                    condition_met = stop_text.lower() in extracted.lower()
+                except Exception as err:
+                    log(f"[Interval {interval_id}] Error checking stop text: {err}")
+                
+        if condition_met:
+            log(f"[Interval {interval_id}] Stop condition met ({stop_cond_type}). Clearing interval.")
+            break
+            
+        if action_workflow_path:
+            log(f"[Interval {interval_id}] Triggering sub-workflow: {action_workflow_path}")
+            try:
+                if os.path.exists(action_workflow_path):
+                    step_run_workflow({"workflowPath": action_workflow_path}, dry_run, depth=0)
+                else:
+                    log(f"[Interval {interval_id}] Action workflow path does not exist: {action_workflow_path}")
+            except Exception as err:
+                log(f"[Interval {interval_id}] Error executing action workflow: {err}")
+                
+        sleep_start = time.time()
+        while time.time() - sleep_start < interval_sec:
+            if stop_event.is_set():
+                break
+            time.sleep(0.1)
+            
+    with intervals_lock:
+        if interval_id in active_intervals:
+            del active_intervals[interval_id]
+    log(f"[Interval {interval_id}] Worker thread stopped.")
+
+def step_clear_interval(step: dict[str, Any]) -> None:
+    interval_id = step.get("intervalId")
+    if not interval_id:
+        log("No intervalId specified for clear_interval step.")
+        return
+        
+    with intervals_lock:
+        if interval_id == "all":
+            log("Stopping all active intervals...")
+            for key, val in list(active_intervals.items()):
+                val["stop_event"].set()
+        elif interval_id in active_intervals:
+            log(f"Stopping interval: {interval_id}")
+            active_intervals[interval_id]["stop_event"].set()
+        else:
+            log(f"Interval {interval_id} not found or already stopped.")
+
+def execute_step_list(steps: list[dict[str, Any]], dry_run: bool, label: str, step_delay: float = 0.0, depth: int = 0) -> None:
     log(f"Running {label} sequence with {len(steps)} step(s)")
     for index, step in enumerate(steps, start=1):
         step_type = step["type"]
@@ -724,19 +942,48 @@ def execute_step_list(steps: list[dict[str, Any]], dry_run: bool, label: str, st
         if step_type == "launch_app":
             run_command(step["command"], dry_run)
         elif step_type == "click":
-            step_click(step, dry_run)
+            with gui_lock:
+                step_click(step, dry_run)
         elif step_type == "double_click":
-            step_double_click(step, dry_run)
+            with gui_lock:
+                step_double_click(step, dry_run)
         elif step_type == "wait":
             step_wait(step)
         elif step_type == "wait_for_image":
-            step_wait_for_image(step, dry_run)
+            with gui_lock:
+                step_wait_for_image(step, dry_run)
         elif step_type == "check_text":
-            step_check_text(step, dry_run)
+            with gui_lock:
+                step_check_text(step, dry_run)
         elif step_type == "conditional":
-            step_conditional(step, dry_run)
+            with gui_lock:
+                step_conditional(step, dry_run)
+        elif step_type == "run_workflow":
+            step_run_workflow(step, dry_run, depth)
+        elif step_type == "conditional_workflow":
+            step_conditional_workflow(step, dry_run, depth)
+        elif step_type == "check_interval":
+            step_check_interval(step, dry_run)
+        elif step_type == "clear_interval":
+            step_clear_interval(step)
+        elif step_type == "press_key":
+            with gui_lock:
+                step_press_key(step, dry_run)
         else:
             raise ValueError(f"Unsupported step type: {step_type}")
+
+def step_press_key(step: dict[str, Any], dry_run: bool) -> None:
+    key = step.get("key", "f5").lower()
+    if dry_run:
+        log(f"DRY RUN press key: {key}")
+    else:
+        try:
+            import pyautogui
+            log(f"Pressing key: {key}")
+            pyautogui.press(key)
+        except Exception as err:
+            log(f"Error pressing key {key}: {err}")
+            raise
 
         if step_delay > 0 and index < len(steps):
             log(f"Waiting {step_delay}s between steps...")
@@ -788,29 +1035,38 @@ def execute_workflow(workflow: dict[str, Any]) -> None:
     log(f"Mode: {'dry-run' if dry_run else 'live'}")
     wait_until_schedule(workflow, dry_run)
 
-    repeat = settings.get("repeat", {})
-    if repeat.get("enabled"):
-        times = repeat.get("times", 0)  # 0 means infinite loop
-        interval_ms = repeat.get("intervalMs", 0)
-        
-        run_count = 0
-        while True:
-            run_count += 1
-            log(f"--- Running workflow iteration {run_count} ---")
+    try:
+        repeat = settings.get("repeat", {})
+        if repeat.get("enabled"):
+            times = repeat.get("times", 0)  # 0 means infinite loop
+            interval_ms = repeat.get("intervalMs", 0)
+            
+            run_count = 0
+            while True:
+                run_count += 1
+                log(f"--- Running workflow iteration {run_count} ---")
+                execute_step_list(start_steps, dry_run, "start", step_delay)
+                execute_step_list(stop_steps, dry_run, "stop", step_delay)
+                
+                if times > 0 and run_count >= times:
+                    log(f"Reached loop count limit ({times}). Ending workflow.")
+                    break
+                
+                log(f"Waiting {interval_ms} ms before next iteration...")
+                time.sleep(interval_ms / 1000)
+        else:
             execute_step_list(start_steps, dry_run, "start", step_delay)
             execute_step_list(stop_steps, dry_run, "stop", step_delay)
-            
-            if times > 0 and run_count >= times:
-                log(f"Reached loop count limit ({times}). Ending workflow.")
-                break
-            
-            log(f"Waiting {interval_ms} ms before next iteration...")
-            time.sleep(interval_ms / 1000)
-    else:
-        execute_step_list(start_steps, dry_run, "start", step_delay)
-        execute_step_list(stop_steps, dry_run, "stop", step_delay)
 
-    log("Workflow finished successfully")
+        log("Workflow finished successfully")
+    finally:
+        # Stop all running intervals
+        with intervals_lock:
+            if active_intervals:
+                log("Cleaning up active intervals...")
+                for id_key, item in list(active_intervals.items()):
+                    item["stop_event"].set()
+                active_intervals.clear()
 
 
 def main() -> int:

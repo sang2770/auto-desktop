@@ -704,6 +704,26 @@ button.accent {
   border-left: 5px solid #e91e63;
 }
 
+.step-card.step-run_workflow {
+  border-left: 5px solid #a855f7;
+}
+
+.step-card.step-conditional_workflow {
+  border-left: 5px solid #db2777;
+}
+
+.step-card.step-check_interval {
+  border-left: 5px solid #06b6d4;
+}
+
+.step-card.step-clear_interval {
+  border-left: 5px solid #ef4444;
+}
+
+.step-card.step-press_key {
+  border-left: 5px solid #f97316;
+}
+
 
 .step-card-header {
   display: flex;
@@ -766,6 +786,31 @@ button.accent {
 .step-card.step-conditional .step-card-badge {
   background: rgba(233, 30, 99, 0.15);
   color: #ec4899;
+}
+
+.step-card.step-run_workflow .step-card-badge {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+}
+
+.step-card.step-conditional_workflow .step-card-badge {
+  background: rgba(219, 39, 119, 0.15);
+  color: #f472b6;
+}
+
+.step-card.step-check_interval .step-card-badge {
+  background: rgba(6, 182, 212, 0.15);
+  color: #22d3ee;
+}
+
+.step-card.step-clear_interval .step-card-badge {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+}
+
+.step-card.step-press_key .step-card-badge {
+  background: rgba(249, 115, 22, 0.15);
+  color: #fb923c;
 }
 
 
