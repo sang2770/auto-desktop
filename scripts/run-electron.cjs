@@ -1,6 +1,10 @@
 const { spawn } = require("node:child_process");
+const electron = require("electron");
 
-const DEV_URLS = process.argv.slice(2).length > 0 ? process.argv.slice(2) : ["http://localhost:5173", "http://127.0.0.1:5173"];
+const DEV_URLS =
+  process.argv.slice(2).length > 0
+    ? process.argv.slice(2)
+    : ["http://localhost:5173", "http://127.0.0.1:5173"];
 
 async function checkUrl(url) {
   try {
@@ -20,23 +24,35 @@ async function waitForRenderer(timeoutMs = 60000) {
         return url;
       }
     }
+
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
-  throw new Error(`Timed out waiting for any dev server URL: ${DEV_URLS.join(", ")}`);
+  throw new Error(
+    `Timed out waiting for any dev server URL: ${DEV_URLS.join(", ")}`
+  );
 }
 
 async function main() {
   const readyUrl = await waitForRenderer();
 
-  const env = { ...process.env };
-  delete env.ELECTRON_RUN_AS_NODE;
-  env.AUTO_DESKTOP_DEV_SERVER_URL = readyUrl;
+  const env = {
+    ...process.env,
+    AUTO_DESKTOP_DEV_SERVER_URL: readyUrl,
+  };
 
-  const child = spawn("./node_modules/.bin/electron", ["."], {
+  delete env.ELECTRON_RUN_AS_NODE;
+
+  const child = spawn(electron, ["."], {
     stdio: "inherit",
     env,
-    shell: false
+    windowsHide: false,
+  });
+
+  child.on("error", (err) => {
+    console.error("[electron] Failed to launch Electron:");
+    console.error(err);
+    process.exit(1);
   });
 
   child.on("exit", (code, signal) => {
@@ -44,6 +60,7 @@ async function main() {
       process.kill(process.pid, signal);
       return;
     }
+
     process.exit(code ?? 0);
   });
 }

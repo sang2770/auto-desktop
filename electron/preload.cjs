@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("desktopApi", {
   pickWorkflowFile: () => ipcRenderer.invoke("workflow:pick-file"),
 
   runWorkflow: (payload) => ipcRenderer.invoke("runner:start", payload),
+  stopWorkflow: () => ipcRenderer.invoke("runner:stop"),
   saveImage: (payload) => ipcRenderer.invoke("image:save", payload),
   readImage: (filePath) => ipcRenderer.invoke("image:read", filePath),
   captureMousePosition: () => ipcRenderer.invoke("mouse:capture-position"),

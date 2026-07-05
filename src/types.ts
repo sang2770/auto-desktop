@@ -1,10 +1,11 @@
 export type ClickStep = {
   type: "click";
   name: string;
-  clickType: "coordinate" | "image";
+  clickType: "coordinate" | "image" | "text";
   x?: number;
   y?: number;
   image?: string;
+  text?: string;
   region?: [number, number, number, number];
   timeoutMs?: number;
   confidence?: number;
@@ -16,10 +17,11 @@ export type ClickStep = {
 export type DoubleClickStep = {
   type: "double_click";
   name: string;
-  clickType: "coordinate" | "image";
+  clickType: "coordinate" | "image" | "text";
   x?: number;
   y?: number;
   image?: string;
+  text?: string;
   region?: [number, number, number, number];
   timeoutMs?: number;
   confidence?: number;
@@ -173,6 +175,7 @@ declare global {
         stdout: string;
         stderr: string;
       }>;
+      stopWorkflow: () => Promise<boolean>;
       saveImage: (payload: { name: string; base64: string }) => Promise<string>;
       readImage: (filePath: string) => Promise<string>;
       captureMousePosition: () => Promise<{ x: number; y: number } | null>;

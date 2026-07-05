@@ -10,31 +10,27 @@
   "settings": {
     "dryRun": false,
     "retryCount": 0,
-    "captureOnError": true
+    "captureOnError": true,
+    "repeat": {
+      "enabled": false,
+      "times": 0,
+      "intervalMs": 1000
+    }
   },
   "startSteps": [
     {
       "type": "click",
-      "name": "Click Khiếu nại",
+      "name": "Click chuột",
       "clickType": "coordinate",
-      "x": 1200,
-      "y": 600,
       "delayBeforeSec": 0,
-      "delayAfterSec": 1
-    },
-    {
-      "type": "click",
-      "name": "Click OK",
-      "clickType": "coordinate",
-      "x": 1400,
-      "y": 600,
-      "delayBeforeSec": 0,
-      "delayAfterSec": 1
+      "delayAfterSec": 0,
+      "x": 0,
+      "y": 0
     },
     {
       "type": "run_workflow",
       "name": "Chạy luồng tắt live",
-      "workflowPath": "tat_live.json"
+      "workflowPath": "C:\\Users\\Admin\\Downloads\\auto-desktop-master\\workflows\\tat_live.json"
     }
   ],
   "stopSteps": []

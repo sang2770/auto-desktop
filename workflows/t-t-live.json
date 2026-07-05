@@ -10,18 +10,32 @@
   "settings": {
     "dryRun": false,
     "retryCount": 0,
-    "captureOnError": true
+    "captureOnError": true,
+    "repeat": {
+      "enabled": false,
+      "times": 0,
+      "intervalMs": 1000
+    }
   },
   "startSteps": [
     {
       "type": "click",
       "name": "Click chuột tắt live",
-      "clickType": "image",
-      "image": "C:\\Users\\Admin\\AppData\\Roaming\\auto-desktop\\workflows\\images\\crop-click-1783193817159.png",
-      "confidence": 0.8,
-      "timeoutMs": 5000,
+      "clickType": "coordinate",
       "delayBeforeSec": 0,
-      "delayAfterSec": 0
+      "delayAfterSec": 0,
+      "x": 2989,
+      "y": 863
+    },
+    {
+      "type": "click",
+      "name": "Click chuột",
+      "clickType": "image",
+      "delayBeforeSec": 5,
+      "delayAfterSec": 0,
+      "image": "C:\\Users\\Admin\\AppData\\Roaming\\auto-desktop\\workflows\\images\\crop-click-1783210310250.png",
+      "confidence": 0.8,
+      "timeoutMs": 5000
     },
     {
       "type": "click",
@@ -36,7 +50,7 @@
     {
       "type": "wait_for_image",
       "name": "Đợi ảnh kết thúc live xuất hiện",
-      "image": "C:\\Users\\Admin\\AppData\\Roaming\\auto-desktop\\workflows\\images\\crop-wait-1783193872610.png",
+      "image": "C:\\Users\\Admin\\AppData\\Roaming\\auto-desktop\\workflows\\images\\crop-wait-1783210374129.png",
       "timeoutMs": 10000,
       "confidence": 0.8
     },
@@ -44,10 +58,10 @@
       "type": "click",
       "name": "Click đóng",
       "clickType": "coordinate",
-      "x": 3162,
-      "y": 93,
       "delayBeforeSec": 0,
-      "delayAfterSec": 0
+      "delayAfterSec": 0,
+      "x": 3168,
+      "y": 107
     }
   ],
   "stopSteps": []

@@ -228,8 +228,13 @@ function StepCard({
     reader.readAsDataURL(file);
   }
 
+  const isCoordinateClick = 
+    (step.type === "click" && (!step.clickType || step.clickType === "coordinate")) ||
+    (step.type === "double_click" && (!step.clickType || step.clickType === "coordinate")) ||
+    (step.type === "conditional" && (step.actionType === "click" || step.actionType === "double_click"));
+
   return (
-    <div className={`step-card step-${step.type}`}>
+    <div className={`step-card step-${step.type} ${isCoordinateClick ? "coordinate-highlight" : ""}`}>
       <div className="step-card-header">
         <div className="step-card-title-group">
           <span className="step-card-num">#{String(index + 1).padStart(2, "0")}</span>
@@ -390,7 +395,7 @@ function StepCard({
                 <select
                   value={step.clickType || "coordinate"}
                   onChange={(e) => {
-                    const clickType = e.target.value as "coordinate" | "image";
+                    const clickType = e.target.value as "coordinate" | "image" | "text";
                     if (clickType === "image") {
                       onUpdate({
                         ...step,
@@ -399,7 +404,20 @@ function StepCard({
                         confidence: step.confidence || 0.8,
                         timeoutMs: step.timeoutMs || 5000,
                         x: undefined,
-                        y: undefined
+                        y: undefined,
+                        text: undefined
+                      });
+                    } else if (clickType === "text") {
+                      onUpdate({
+                        ...step,
+                        clickType,
+                        text: step.text || "",
+                        timeoutMs: step.timeoutMs || 5000,
+                        x: undefined,
+                        y: undefined,
+                        image: undefined,
+                        confidence: undefined,
+                        region: undefined
                       });
                     } else {
                       onUpdate({
@@ -410,7 +428,8 @@ function StepCard({
                         image: undefined,
                         confidence: undefined,
                         timeoutMs: undefined,
-                        region: undefined
+                        region: undefined,
+                        text: undefined
                       });
                     }
                   }}
@@ -421,10 +440,11 @@ function StepCard({
                       ? "Tìm Ảnh rồi Double Click (Khớp hình ảnh)"
                       : "Tìm Ảnh rồi Click (Khớp hình ảnh)"}
                   </option>
+                  <option value="text">Tìm Chữ rồi Click (Nhận diện chữ OCR)</option>
                 </select>
 
               </div>
-              {step.clickType === "coordinate" ? (
+              {step.clickType === "coordinate" && (
                 <>
                   <div className="form-group">
                     <label>Toạ độ X</label>
@@ -475,7 +495,8 @@ function StepCard({
                     </div>
                   </div>
                 </>
-              ) : (
+              )}
+              {step.clickType === "image" && (
                 <>
                   <div className="form-group">
                     <label>Thời gian chờ tối đa (giây)</label>
@@ -495,6 +516,42 @@ function StepCard({
                       value={step.confidence ?? 0.8}
                       onChange={(e) => onUpdate({ ...step, confidence: parseFloat(e.target.value) })}
                     />
+                  </div>
+                </>
+              )}
+              {step.clickType === "text" && (
+                <>
+                  <div className="form-group" style={{ gridColumn: "span 2" }}>
+                    <label>Chữ cần tìm để click</label>
+                    <input
+                      type="text"
+                      value={step.text ?? ""}
+                      onChange={(e) => onUpdate({ ...step, text: e.target.value })}
+                      placeholder="Nhập từ hoặc cụm từ cần tìm..."
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Thời gian chờ tối đa (giây)</label>
+                    <input
+                      type="number"
+                      value={((step.timeoutMs || 5000) / 1000)}
+                      onChange={(e) => onUpdate({ ...step, timeoutMs: (parseFloat(e.target.value) || 5) * 1000 })}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Khoanh vùng tìm chữ (Region)</label>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const res = await desktopApi.captureRegion();
+                        if (res) {
+                          onUpdate({ ...step, region: [res.x, res.y, res.width, res.height] });
+                        }
+                      }}
+                      style={{ width: "100%", marginTop: "6px", background: "rgba(255, 255, 255, 0.08)" }}
+                    >
+                      {step.region ? `Vùng: [${step.region.join(",")}]` : "🎯 Vẽ vùng tìm kiếm"}
+                    </button>
                   </div>
                 </>
               )}
@@ -1407,6 +1464,14 @@ function App() {
     });
   }
 
+  function updateWorkflowField<K extends keyof Workflow>(field: K, value: Workflow[K]) {
+    if (!workflow) return;
+    updateWorkflow({
+      ...workflow,
+      [field]: value
+    });
+  }
+
   function updateStep(index: number, updatedStep: Step) {
     if (!workflow) return;
     const newSteps = [...workflow.startSteps];
@@ -1483,19 +1548,53 @@ function App() {
       return;
     }
 
-    const path = await desktopApi.saveWorkflow({
-      name: parsed.value.name,
-      content: workflowText,
-      filePath: loadedPath || undefined
-    });
-    setLoadedPath(path);
-    setSavedWorkflows(await desktopApi.listWorkflows());
+    try {
+      const oldFilename = loadedPath ? loadedPath.split(/[/\\]/).pop() || "" : "";
+      const newSafeName = parsed.value.name.replace(/[^a-z0-9-_]+/gi, "-").toLowerCase() + ".json";
+      
+      let filePathToSave = loadedPath || undefined;
+      let oldFileToDelete = null;
 
-    const relativePath = path.replace(window.location.origin, "");
+      if (loadedPath && oldFilename && !loadedPath.startsWith("browser://") && oldFilename.toLowerCase() !== newSafeName.toLowerCase()) {
+        const separator = loadedPath.includes("\\") ? "\\" : "/";
+        const parts = loadedPath.split(separator);
+        parts.pop();
+        filePathToSave = [...parts, newSafeName].join(separator);
+        oldFileToDelete = loadedPath;
+      }
 
-    setStatus(`Đã lưu tại ${relativePath}`);
-    setLogs((current) => [`Lưu thành công tại ${relativePath}`, ...current]);
+      const path = await desktopApi.saveWorkflow({
+        name: parsed.value.name,
+        content: workflowText,
+        filePath: filePathToSave
+      });
 
+      if (path) {
+        if (oldFileToDelete) {
+          try {
+            const success = isElectronDesktopApi
+              ? await window.desktopApi?.deleteWorkflow(oldFileToDelete)
+              : await desktopApi.deleteWorkflow(oldFileToDelete);
+            if (success) {
+              setLogs((current) => [`Đã dọn dẹp file cũ: ${oldFileToDelete}`, ...current]);
+            }
+          } catch (delErr) {
+            console.error("Failed to delete old file during rename:", delErr);
+          }
+        }
+        setLoadedPath(path);
+        setSavedWorkflows(await desktopApi.listWorkflows());
+
+        const relativePath = path.replace(window.location.origin, "");
+        setStatus(`Đã lưu tại ${relativePath}`);
+        setLogs((current) => [`Lưu thành công tại ${relativePath}`, ...current]);
+      } else {
+        setStatus("Không thể lưu quy trình.");
+      }
+    } catch (err) {
+      console.error("Error saving workflow:", err);
+      setStatus("Lỗi khi lưu quy trình.");
+    }
   }
 
 
@@ -1587,6 +1686,23 @@ function App() {
     }
   }
 
+  async function handleStop() {
+    try {
+      setStatus("Đang dừng quy trình...");
+      const success = isElectronDesktopApi
+        ? await window.desktopApi?.stopWorkflow()
+        : await desktopApi.stopWorkflow();
+      if (success) {
+        setStatus("Quy trình đã dừng.");
+        setLogs((current) => ["Đã dừng quy trình theo yêu cầu.", ...current]);
+      } else {
+        setStatus("Không thể dừng quy trình (hoặc quy trình đã kết thúc).");
+      }
+    } catch (err) {
+      setStatus(`Lỗi khi dừng: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   if (isCompact) {
     const latestLog = logs[0] || "Chưa có nhật ký hoạt động nào.";
     const statusDotClass = isRunning 
@@ -1649,8 +1765,8 @@ function App() {
 
           <div>
             {isRunning ? (
-              <button className="compact-action-btn running-btn" disabled>
-                Đang chạy tự động...
+              <button className="compact-action-btn stop-btn" onClick={handleStop} style={{ backgroundColor: "#dc3545", color: "#fff" }}>
+                🛑 Dừng quy trình
               </button>
             ) : (
               <button className="compact-action-btn run-btn" onClick={handleRun} disabled={!workflow}>
@@ -1718,7 +1834,31 @@ function App() {
         <section className="editor-panel">
           <div className="panelHeader">
             <div>
-              <h2>{workflow ? workflow.name : "Thiết kế Quy trình"}</h2>
+              {workflow ? (
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <input
+                    type="text"
+                    value={workflow.name}
+                    onChange={(e) => updateWorkflowField("name", e.target.value)}
+                    className="workflow-name-header-input"
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      borderBottom: "1px dashed rgba(255,255,255,0.3)",
+                      color: "#fff",
+                      fontSize: "1.5rem",
+                      fontWeight: "bold",
+                      padding: "2px 4px",
+                      margin: 0,
+                      outline: "none",
+                      width: "350px"
+                    }}
+                    placeholder="Nhập tên quy trình..."
+                  />
+                </div>
+              ) : (
+                <h2>Thiết kế Quy trình</h2>
+              )}
               <p style={{ margin: "2px 0 0", opacity: 0.6, fontSize: "0.85rem" }}>
                 {loadedPath ? `Đường dẫn: ${loadedPath.replace(window.location.origin, "")}` : "Tệp cấu hình chưa lưu"}
               </p>
@@ -1729,9 +1869,15 @@ function App() {
               <button className="primary" onClick={handleSave}>
                 Lưu
               </button>
-              <button className="accent" onClick={handleRun}>
-                Chạy
-              </button>
+              {isRunning ? (
+                <button className="stop-btn" onClick={handleStop} style={{ backgroundColor: "#dc3545", color: "#fff" }}>
+                  Dừng
+                </button>
+              ) : (
+                <button className="accent" onClick={handleRun}>
+                  Chạy
+                </button>
+              )}
             </div>
           </div>
 
@@ -1784,6 +1930,24 @@ function App() {
                 <div className="form-section">
                   <h3 className="form-section-title">⚙️ Cấu hình chung</h3>
                   <div className="form-grid">
+                    <div className="form-group" style={{ gridColumn: "span 2" }}>
+                      <label>Tên quy trình</label>
+                      <input
+                        type="text"
+                        value={workflow.name}
+                        onChange={(e) => updateWorkflowField("name", e.target.value)}
+                        placeholder="Nhập tên quy trình"
+                      />
+                    </div>
+                    <div className="form-group" style={{ gridColumn: "span 2" }}>
+                      <label>Mô tả quy trình</label>
+                      <textarea
+                        value={workflow.description ?? ""}
+                        onChange={(e) => updateWorkflowField("description", e.target.value)}
+                        placeholder="Nhập mô tả quy trình"
+                        style={{ minHeight: "60px", resize: "vertical" }}
+                      />
+                    </div>
                     <div className="form-group">
                       <label>Chế độ chạy thử (Dry Run)</label>
                       <select
@@ -1981,16 +2145,26 @@ function App() {
                       Trình tự ({parsed.value.startSteps.length} bước):
                     </div>
                     <ul className="stepList">
-                      {parsed.value.startSteps.map((step, index) => (
-                        <li key={`${step.type}-${index}`}>
-                          <span className="stepIndex">{String(index + 1).padStart(2, "0")}</span>
-                          <div>
-                            <strong>{step.name}</strong>
+                      {parsed.value.startSteps.map((step, index) => {
+                        const isStepCoord = 
+                          (step.type === "click" && (!step.clickType || step.clickType === "coordinate")) ||
+                          (step.type === "double_click" && (!step.clickType || step.clickType === "coordinate")) ||
+                          (step.type === "conditional" && (step.actionType === "click" || step.actionType === "double_click"));
+                        return (
+                          <li key={`${step.type}-${index}`} className={isStepCoord ? "coordinate-warning" : ""}>
+                            <span className="stepIndex">{String(index + 1).padStart(2, "0")}</span>
+                            <div>
+                              <strong>{step.name}</strong>
+                              {isStepCoord && (
+                                <span style={{ color: "#f59e0b", fontSize: "0.78rem", fontWeight: "bold", marginLeft: "6px" }}>
+                                  ⚠️ Cần sửa
+                                </span>
+                              )}
                             <p style={{ textTransform: "capitalize", fontSize: "0.82rem", margin: "2px 0 0", opacity: 0.7 }}>
                               {step.type === "launch_app" && "Chạy App"}
                               {step.type === "wait" && `Chờ ${(step.ms / 1000)}s`}
-                              {step.type === "click" && `Click (${(step.clickType || "coordinate") === "coordinate" ? `Toạ độ ${step.x},${step.y}` : "Khớp hình ảnh"})`}
-                              {step.type === "double_click" && `Double Click (${(step.clickType || "coordinate") === "coordinate" ? `Toạ độ ${step.x},${step.y}` : "Khớp hình ảnh"})`}
+                              {step.type === "click" && `Click (${(step.clickType || "coordinate") === "coordinate" ? `Toạ độ ${step.x},${step.y}` : (step.clickType === "text" ? `Chữ: "${step.text}"` : "Khớp hình ảnh")})`}
+                              {step.type === "double_click" && `Double Click (${(step.clickType || "coordinate") === "coordinate" ? `Toạ độ ${step.x},${step.y}` : (step.clickType === "text" ? `Chữ: "${step.text}"` : "Khớp hình ảnh")})`}
                               {step.type === "wait_for_image" && "Đợi hình ảnh"}
                               {step.type === "check_text" && `Kiểm tra chữ: "${step.text}"`}
                               {step.type === "conditional" && `Kiểm tra: Nếu thấy ${step.conditionType === "image" ? "ảnh" : `chữ "${step.text}"`} thì ${step.actionType}`}
@@ -2002,7 +2176,7 @@ function App() {
                             </p>
                           </div>
                         </li>
-                      ))}
+                      )})}
                       {parsed.value.startSteps.length === 0 && (
                         <p style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.85rem" }}>Chưa có hành động nào.</p>
                       )}

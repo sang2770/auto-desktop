@@ -324,6 +324,88 @@ def perform_double_click(
     return screen_x, screen_y, backend
 
 
+def highlight_coordinate(x: int, y: int, duration_ms: int = 500) -> None:
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+        root.overrideredirect(True)
+        root.attributes("-topmost", True)
+        
+        size = 40
+        left = int(x - size / 2)
+        top = int(y - size / 2)
+        root.geometry(f"{size}x{size}+{left}+{top}")
+        
+        canvas = tk.Canvas(root, width=size, height=size, highlightthickness=0)
+        canvas.pack()
+        
+        if sys.platform == "win32":
+            root.wm_attributes("-transparentcolor", "white")
+            canvas.configure(bg="white")
+        else:
+            root.attributes("-alpha", 0.85)
+            canvas.configure(bg="red")
+            
+        canvas.create_oval(2, 2, size-2, size-2, outline="red", width=3)
+        canvas.create_line(size/2, 0, size/2, size, fill="red", width=2)
+        canvas.create_line(0, size/2, size, size/2, fill="red", width=2)
+        
+        root.after(duration_ms, root.destroy)
+        root.mainloop()
+    except Exception as e:
+        log(f"Highlight coordinate failed (non-critical): {e}")
+
+
+def locate_text_in_image(img, target_text: str) -> tuple[int, int, int, int] | None:
+    try:
+        from pytesseract import Output
+        import pytesseract
+        
+        data = pytesseract.image_to_data(img, output_type=Output.DICT)
+        n_boxes = len(data['text'])
+        
+        target_words = target_text.lower().split()
+        if not target_words:
+            return None
+            
+        ocr_words = []
+        for i in range(n_boxes):
+            text = data['text'][i].strip()
+            conf = float(data['conf'][i]) if 'conf' in data else 100
+            if text and conf > -1:
+                ocr_words.append({
+                    'text': text.lower(),
+                    'left': data['left'][i],
+                    'top': data['top'][i],
+                    'width': data['width'][i],
+                    'height': data['height'][i],
+                    'index': i
+                })
+                
+        m = len(target_words)
+        for i in range(len(ocr_words) - m + 1):
+            match = True
+            for j in range(m):
+                if target_words[j] not in ocr_words[i+j]['text']:
+                    match = False
+                    break
+            if match:
+                first_word = ocr_words[i]
+                last_word = ocr_words[i + m - 1]
+                
+                left = first_word['left']
+                top = min(w['top'] for w in ocr_words[i:i+m])
+                right = last_word['left'] + last_word['width']
+                bottom = max(w['top'] + w['height'] for w in ocr_words[i:i+m])
+                
+                width = right - left
+                height = bottom - top
+                return (left, top, width, height)
+    except Exception as e:
+        log(f"OCR text search in image failed: {e}")
+    return None
+
+
 def step_click(step: dict[str, Any], dry_run: bool) -> None:
     delay_before = float(step.get("delayBeforeSec", 0))
     if delay_before > 0:
@@ -382,6 +464,63 @@ def step_click(step: dict[str, Any], dry_run: bool) -> None:
                 if last_locate_error:
                     raise TimeoutError(f"Image for clicking not found within timeout: {image}. Last locate error: {last_locate_error}")
                 raise TimeoutError(f"Image for clicking not found within timeout: {image}")
+    elif click_type == "text":
+        text_val = step.get("text")
+        if not text_val:
+            raise ValueError("Text is required for click by text.")
+        timeout = step.get("timeoutMs", 5000)
+        region = step.get("region")
+
+        if dry_run:
+            log(f"DRY RUN click by text text='{text_val}' timeoutMs={timeout} region={region}")
+        else:
+            try:
+                import pyautogui  # type: ignore
+                import pytesseract  # type: ignore
+            except ImportError as error:
+                raise RuntimeError("pyautogui and pytesseract are required for text detection and clicking.") from error
+
+            log(
+                "Click text diagnostics "
+                f"platform={sys.platform} accessibility={get_darwin_accessibility_status()} "
+                f"frontmostApp={get_frontmost_app_name()} region={region} text='{text_val}'"
+            )
+            start = time.time()
+            found = False
+            while time.time() - start < timeout / 1000:
+                with gui_lock:
+                    screenshot = pyautogui.screenshot(region=tuple(region) if region else None)
+                
+                match_box = locate_text_in_image(screenshot, text_val)
+                if match_box:
+                    left, top, width, height = match_box
+                    offset_x = region[0] if region else 0
+                    offset_y = region[1] if region else 0
+                    
+                    center_x = offset_x + left + width // 2
+                    center_y = offset_y + top + height // 2
+                    
+                    highlight_coordinate(center_x, center_y)
+                    
+                    mouse_before = get_mouse_position(pyautogui)
+                    frontmost_before = get_frontmost_app_name()
+                    log(
+                        f"Found text match box={match_box} globalCenter=({center_x}, {center_y}) "
+                        f"mouseBefore={mouse_before} frontmostBefore={frontmost_before}"
+                    )
+                    screen_x, screen_y, backend = perform_click(pyautogui, center_x, center_y)
+                    mouse_after = get_mouse_position(pyautogui)
+                    frontmost_after = get_frontmost_app_name()
+                    log(
+                        f"Found text and clicked at ({screen_x}, {screen_y}) "
+                        f"backend={backend} mouseAfter={mouse_after} frontmostAfter={frontmost_after}"
+                    )
+                    found = True
+                    break
+                time.sleep(0.4)
+
+            if not found:
+                raise TimeoutError(f"Text for clicking not found within timeout: '{text_val}'")
     else:
         x = step.get("x")
         y = step.get("y")
@@ -394,6 +533,8 @@ def step_click(step: dict[str, Any], dry_run: bool) -> None:
                 import pyautogui  # type: ignore
             except ImportError as error:
                 raise RuntimeError("pyautogui is required for real click actions.") from error
+
+            highlight_coordinate(x, y)
 
             mouse_before = get_mouse_position(pyautogui)
             log(
@@ -473,6 +614,63 @@ def step_double_click(step: dict[str, Any], dry_run: bool) -> None:
                 if last_locate_error:
                     raise TimeoutError(f"Image for double clicking not found within timeout: {image}. Last locate error: {last_locate_error}")
                 raise TimeoutError(f"Image for double clicking not found within timeout: {image}")
+    elif click_type == "text":
+        text_val = step.get("text")
+        if not text_val:
+            raise ValueError("Text is required for double click by text.")
+        timeout = step.get("timeoutMs", 5000)
+        region = step.get("region")
+
+        if dry_run:
+            log(f"DRY RUN double click by text text='{text_val}' timeoutMs={timeout} region={region}")
+        else:
+            try:
+                import pyautogui  # type: ignore
+                import pytesseract  # type: ignore
+            except ImportError as error:
+                raise RuntimeError("pyautogui and pytesseract are required for text detection and double clicking.") from error
+
+            log(
+                "Double click text diagnostics "
+                f"platform={sys.platform} accessibility={get_darwin_accessibility_status()} "
+                f"frontmostApp={get_frontmost_app_name()} region={region} text='{text_val}' interval={interval}"
+            )
+            start = time.time()
+            found = False
+            while time.time() - start < timeout / 1000:
+                with gui_lock:
+                    screenshot = pyautogui.screenshot(region=tuple(region) if region else None)
+                
+                match_box = locate_text_in_image(screenshot, text_val)
+                if match_box:
+                    left, top, width, height = match_box
+                    offset_x = region[0] if region else 0
+                    offset_y = region[1] if region else 0
+                    
+                    center_x = offset_x + left + width // 2
+                    center_y = offset_y + top + height // 2
+                    
+                    highlight_coordinate(center_x, center_y)
+                    
+                    mouse_before = get_mouse_position(pyautogui)
+                    frontmost_before = get_frontmost_app_name()
+                    log(
+                        f"Found text match box={match_box} globalCenter=({center_x}, {center_y}) "
+                        f"mouseBefore={mouse_before} frontmostBefore={frontmost_before}"
+                    )
+                    screen_x, screen_y, backend = perform_double_click(pyautogui, center_x, center_y, interval=interval)
+                    mouse_after = get_mouse_position(pyautogui)
+                    frontmost_after = get_frontmost_app_name()
+                    log(
+                        f"Found text and double clicked at ({screen_x}, {screen_y}) "
+                        f"backend={backend} mouseAfter={mouse_after} frontmostAfter={frontmost_after}"
+                    )
+                    found = True
+                    break
+                time.sleep(0.4)
+
+            if not found:
+                raise TimeoutError(f"Text for double clicking not found within timeout: '{text_val}'")
     else:
         x = step.get("x")
         y = step.get("y")
@@ -485,6 +683,8 @@ def step_double_click(step: dict[str, Any], dry_run: bool) -> None:
                 import pyautogui  # type: ignore
             except ImportError as error:
                 raise RuntimeError("pyautogui is required for real click actions.") from error
+
+            highlight_coordinate(x, y)
 
             mouse_before = get_mouse_position(pyautogui)
             log(
@@ -633,6 +833,7 @@ def step_conditional(step: dict[str, Any], dry_run: bool) -> None:
                 log(f"DRY RUN click at ({x}, {y})")
             else:
                 import pyautogui
+                highlight_coordinate(x, y)
                 mouse_before = get_mouse_position(pyautogui)
                 log(
                     "Conditional click diagnostics "
@@ -653,6 +854,7 @@ def step_conditional(step: dict[str, Any], dry_run: bool) -> None:
                 log(f"DRY RUN double click at ({x}, {y})")
             else:
                 import pyautogui
+                highlight_coordinate(x, y)
                 mouse_before = get_mouse_position(pyautogui)
                 log(
                     "Conditional double click diagnostics "
@@ -1004,6 +1206,10 @@ def execute_step_list(steps: list[dict[str, Any]], dry_run: bool, label: str, st
         else:
             raise ValueError(f"Unsupported step type: {step_type}")
 
+        if step_delay > 0 and index < len(steps):
+            log(f"Waiting {step_delay}s between steps...")
+            time.sleep(step_delay)
+
 def step_press_key(step: dict[str, Any], dry_run: bool) -> None:
     key = step.get("key", "f5").lower()
     if dry_run:
@@ -1016,10 +1222,6 @@ def step_press_key(step: dict[str, Any], dry_run: bool) -> None:
         except Exception as err:
             log(f"Error pressing key {key}: {err}")
             raise
-
-        if step_delay > 0 and index < len(steps):
-            log(f"Waiting {step_delay}s between steps...")
-            time.sleep(step_delay)
 
 
 

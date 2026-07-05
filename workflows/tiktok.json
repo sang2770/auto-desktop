@@ -22,7 +22,7 @@
     {
       "type": "run_workflow",
       "name": "0. Luồng refresh game",
-      "workflowPath": "/Users/sangnguyen/Desktop/Code/tool/auto-desktop/workflows/refresh_game.json"
+      "workflowPath": "C:\\Users\\Admin\\Downloads\\auto-desktop-master\\workflows\\refresh_game.json"
     },
     {
       "type": "click",
@@ -40,8 +40,8 @@
       "clickType": "coordinate",
       "delayBeforeSec": 6,
       "delayAfterSec": 0,
-      "x": 2690,
-      "y": 777
+      "x": 2698,
+      "y": 775
     },
     {
       "type": "wait",
@@ -59,15 +59,6 @@
       "timeoutMs": 5000
     },
     {
-      "type": "click",
-      "name": "5. Check live game (focus)",
-      "clickType": "coordinate",
-      "x": 2933,
-      "y": 856,
-      "delayBeforeSec": 0,
-      "delayAfterSec": 0
-    },
-    {
       "type": "wait",
       "name": "Chờ game tải",
       "ms": 5000
@@ -77,7 +68,9 @@
       "name": "Bắt đầu check vi phạm",
       "intervalId": "check_violation",
       "intervalSec": 5,
-      "actionWorkflowPath": "check_violation.json"
+      "actionWorkflowPath": "C:\\Users\\Admin\\Downloads\\auto-desktop-master\\workflows\\check_violation.json",
+      "stopConditionType": "text",
+      "stopText": "Khiếu nại"
     },
     {
       "type": "wait",
@@ -87,7 +80,7 @@
     {
       "type": "run_workflow",
       "name": "7. Chạy luồng tắt live",
-      "workflowPath": "/Users/sangnguyen/Desktop/Code/tool/auto-desktop/workflows/tat_live.json"
+      "workflowPath": "C:\\Users\\Admin\\Downloads\\auto-desktop-master\\workflows\\tat_live.json"
     }
   ],
   "stopSteps": []

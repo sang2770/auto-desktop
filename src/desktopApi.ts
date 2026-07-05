@@ -15,6 +15,7 @@ type DesktopApi = {
 
 
   runWorkflow: (payload: { workflow: string }) => Promise<RunnerResult>;
+  stopWorkflow: () => Promise<boolean>;
   saveImage: (payload: { name: string; base64: string }) => Promise<string>;
   readImage: (filePath: string) => Promise<string>;
   captureMousePosition: () => Promise<{ x: number; y: number } | null>;
@@ -85,6 +86,9 @@ const browserApi: DesktopApi = {
       ].join("\n"),
       stderr: ""
     };
+  },
+  async stopWorkflow() {
+    return true;
   },
   async saveImage(payload) {
     // In browser, return base64 string directly as the "file path"

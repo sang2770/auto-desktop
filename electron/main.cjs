@@ -259,13 +259,34 @@ ipcMain.handle("screen:capture-region", async () => {
   }
 });
 
+let activeChild = null;
+
+function killProcessTree(child) {
+  if (!child) return;
+  try {
+    if (process.platform === "win32") {
+      spawn("taskkill", ["/pid", child.pid, "/f", "/t"]);
+    } else {
+      child.kill("SIGKILL");
+    }
+  } catch (err) {
+    console.error("Error killing process tree:", err);
+  }
+}
+
 ipcMain.handle("runner:start", async (_event, payload) => {
+  if (activeChild) {
+    killProcessTree(activeChild);
+    activeChild = null;
+  }
+
   const runner = resolveRunnerCommand();
 
   return await new Promise((resolve, reject) => {
     const child = spawn(runner.command, [...runner.args, "--workflow-json", payload.workflow], {
       cwd: app.isPackaged ? process.resourcesPath : getProjectRoot()
     });
+    activeChild = child;
 
     let stdout = "";
     let stderr = "";
@@ -278,9 +299,28 @@ ipcMain.handle("runner:start", async (_event, payload) => {
       stderr += chunk.toString();
     });
 
-    child.on("error", (error) => reject(error));
-    child.on("close", (code) => resolve({ code, stdout, stderr }));
+    child.on("error", (error) => {
+      if (activeChild === child) {
+        activeChild = null;
+      }
+      reject(error);
+    });
+    child.on("close", (code) => {
+      if (activeChild === child) {
+        activeChild = null;
+      }
+      resolve({ code, stdout, stderr });
+    });
   });
+});
+
+ipcMain.handle("runner:stop", async () => {
+  if (activeChild) {
+    killProcessTree(activeChild);
+    activeChild = null;
+    return true;
+  }
+  return false;
 });
 
 ipcMain.handle("window:set-size", async (event, width, height) => {

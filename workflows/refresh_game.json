@@ -10,22 +10,37 @@
   "settings": {
     "dryRun": false,
     "retryCount": 0,
-    "captureOnError": true
+    "captureOnError": true,
+    "repeat": {
+      "enabled": false,
+      "times": 0,
+      "intervalMs": 1000
+    }
   },
   "startSteps": [
     {
       "type": "click",
       "name": "Click focus game",
-      "clickType": "coordinate",
-      "x": 2933,
-      "y": 856,
+      "clickType": "image",
       "delayBeforeSec": 0,
-      "delayAfterSec": 1
+      "delayAfterSec": 5,
+      "image": "C:\\Users\\Admin\\AppData\\Roaming\\auto-desktop\\workflows\\images\\crop-click-1783209413506.png",
+      "confidence": 0.8,
+      "timeoutMs": 5000
     },
     {
       "type": "press_key",
       "name": "Press Key F5",
       "key": "f5"
+    },
+    {
+      "type": "click",
+      "name": "Click chuột",
+      "clickType": "coordinate",
+      "delayBeforeSec": 10.1,
+      "delayAfterSec": 0,
+      "x": 1273,
+      "y": 797
     }
   ],
   "stopSteps": []
