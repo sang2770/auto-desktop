@@ -1,0 +1,127 @@
+export type ClickStep = {
+  type: "click";
+  name: string;
+  clickType: "coordinate" | "image";
+  x?: number;
+  y?: number;
+  image?: string;
+  region?: [number, number, number, number];
+  timeoutMs?: number;
+  confidence?: number;
+  delayBeforeSec?: number;
+  delayAfterSec?: number;
+  note?: string;
+};
+
+export type DoubleClickStep = {
+  type: "double_click";
+  name: string;
+  clickType: "coordinate" | "image";
+  x?: number;
+  y?: number;
+  image?: string;
+  region?: [number, number, number, number];
+  timeoutMs?: number;
+  confidence?: number;
+  intervalSec?: number;
+  delayBeforeSec?: number;
+  delayAfterSec?: number;
+  note?: string;
+};
+
+export type WaitStep = {
+  type: "wait";
+  name: string;
+  ms: number;
+};
+
+export type WaitForImageStep = {
+  type: "wait_for_image";
+  name: string;
+  image: string;
+  region?: [number, number, number, number];
+  timeoutMs: number;
+  confidence?: number;
+};
+
+export type CheckTextStep = {
+  type: "check_text";
+  name: string;
+  text: string;
+  region?: [number, number, number, number];
+  timeoutMs: number;
+  lang?: string;
+  tesseractConfig?: string;
+  ocrThreshold?: number;
+};
+
+export type LaunchAppStep = {
+  type: "launch_app";
+  name: string;
+  command: string;
+};
+
+export type ConditionalStep = {
+  type: "conditional";
+  name: string;
+  conditionType: "image" | "text";
+  image?: string;
+  confidence?: number;
+  text?: string;
+  region?: [number, number, number, number];
+  actionType: "click" | "click_image" | "double_click" | "double_click_image" | "launch_app" | "wait";
+  clickX?: number;
+  clickY?: number;
+  clickImage?: string;
+  clickConfidence?: number;
+  intervalSec?: number;
+  command?: string;
+  waitMs?: number;
+};
+
+export type Step = ClickStep | DoubleClickStep | WaitStep | WaitForImageStep | CheckTextStep | LaunchAppStep | ConditionalStep;
+
+export type Workflow = {
+  name: string;
+  description: string;
+  schedule: {
+    enabled: boolean;
+    startAt: string;
+    stopAt: string;
+    timezone: string;
+  };
+  settings: {
+    dryRun: boolean;
+    retryCount: number;
+    captureOnError: boolean;
+    stepDelaySec?: number;
+    repeat?: {
+      enabled: boolean;
+      times: number;
+      intervalMs: number;
+    };
+  };
+  startSteps: Step[];
+  stopSteps: Step[];
+};
+
+declare global {
+  interface Window {
+    desktopApi?: {
+      listWorkflows: () => Promise<string[]>;
+      loadWorkflow: (filePath: string) => Promise<string>;
+      saveWorkflow: (payload: { name: string; content: string; filePath?: string }) => Promise<string>;
+      deleteWorkflow: (filePath: string) => Promise<boolean>;
+      pickWorkflowFile: () => Promise<string | null>;
+      runWorkflow: (payload: { workflow: string }) => Promise<{
+        code: number;
+        stdout: string;
+        stderr: string;
+      }>;
+      saveImage: (payload: { name: string; base64: string }) => Promise<string>;
+      readImage: (filePath: string) => Promise<string>;
+      captureMousePosition: () => Promise<{ x: number; y: number } | null>;
+      captureRegion: () => Promise<{ x: number; y: number; width: number; height: number; base64: string } | null>;
+    };
+  }
+}

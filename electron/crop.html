@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body, html {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent;
+      user-select: none;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      cursor: crosshair;
+    }
+    #toolbar {
+      position: absolute;
+      display: none;
+      background: #121211;
+      border: 1px solid #ffb977;
+      border-radius: 10px;
+      padding: 6px;
+      gap: 8px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+      z-index: 1000;
+      align-items: center;
+    }
+    .btn {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.1);
+      color: #fff;
+      padding: 6px 14px;
+      font-size: 13px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 120ms;
+    }
+    .btn:hover {
+      background: #ffb977;
+      color: #000;
+    }
+    .btn.cancel {
+      color: #ff9e9e;
+      background: rgba(239, 68, 68, 0.1);
+      border-color: rgba(239, 68, 68, 0.2);
+    }
+    .btn.cancel:hover {
+      background: #ef4444;
+      color: #fff;
+    }
+    #size-indicator {
+      position: absolute;
+      display: none;
+      background: rgba(18,18,17,0.85);
+      border: 1px solid rgba(255,255,255,0.15);
+      color: #ffb977;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 700;
+      pointer-events: none;
+      z-index: 1000;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+    }
+    #guide {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(18, 18, 17, 0.85);
+      border: 1px solid rgba(255, 185, 119, 0.3);
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 20px;
+      font-size: 14px;
+      font-weight: 500;
+      pointer-events: none;
+      z-index: 1000;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="guide">Nhấp và kéo chuột để chọn vùng màn hình (Nhấn ESC để huỷ)</div>
+  <canvas id="canvas"></canvas>
+  <div id="toolbar">
+    <button class="btn" id="confirm-btn">✓ Xác nhận</button>
+    <button class="btn cancel" id="cancel-btn">✗ Huỷ (ESC)</button>
+  </div>
+  <div id="size-indicator">0 x 0</div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const toolbar = document.getElementById('toolbar');
+    const sizeIndicator = document.getElementById('size-indicator');
+    const guide = document.getElementById('guide');
+
+    let bgImage = new Image();
+    let isDrawing = false;
+    let startX = 0, startY = 0;
+    let currentX = 0, currentY = 0;
+    let selectedBox = null;
+
+    ipcRenderer.on('init-crop', (event, data) => {
+      canvas.width = data.width;
+      canvas.height = data.height;
+      bgImage.src = data.imagePath; // base64 string
+      bgImage.onload = () => {
+        draw();
+      };
+    });
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      
+      // Draw background screen
+      ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+
+      if (selectedBox) {
+        // Draw dark transparent overlay
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        ctx.fillRect(0, 0, canvas.width, selectedBox.y);
+        ctx.fillRect(0, selectedBox.y + selectedBox.h, canvas.width, canvas.height - (selectedBox.y + selectedBox.h));
+        ctx.fillRect(0, selectedBox.y, selectedBox.x, selectedBox.h);
+        ctx.fillRect(selectedBox.x + selectedBox.w, selectedBox.y, canvas.width - (selectedBox.x + selectedBox.w), selectedBox.h);
+
+        // Highlight selection border
+        ctx.strokeStyle = '#ffb977';
+        ctx.lineWidth = 2.5;
+        ctx.strokeRect(selectedBox.x, selectedBox.y, selectedBox.w, selectedBox.h);
+
+        // Size indicator
+        sizeIndicator.style.display = 'block';
+        sizeIndicator.style.left = selectedBox.x + 'px';
+        sizeIndicator.style.top = (selectedBox.y - 32) + 'px';
+        sizeIndicator.innerText = `${selectedBox.w} x ${selectedBox.h} px`;
+      } else {
+        // Dim the whole screen before selection
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+      isDrawing = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      selectedBox = null;
+      toolbar.style.display = 'none';
+      sizeIndicator.style.display = 'none';
+      guide.style.display = 'none';
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (!isDrawing) return;
+      currentX = e.clientX;
+      currentY = e.clientY;
+      
+      const x = Math.min(startX, currentX);
+      const y = Math.min(startY, currentY);
+      const w = Math.abs(currentX - startX);
+      const h = Math.abs(currentY - startY);
+      
+      selectedBox = { x, y, w, h };
+      draw();
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      isDrawing = false;
+      if (selectedBox && selectedBox.w > 4 && selectedBox.h > 4) {
+        toolbar.style.display = 'flex';
+        let toolX = selectedBox.x + selectedBox.w - toolbar.offsetWidth;
+        if (toolX < selectedBox.x) toolX = selectedBox.x;
+        let toolY = selectedBox.y + selectedBox.h + 10;
+        if (toolY + 50 > canvas.height) {
+          toolY = selectedBox.y - toolbar.offsetHeight - 10;
+        }
+        toolbar.style.left = toolX + 'px';
+        toolbar.style.top = toolY + 'px';
+      } else {
+        selectedBox = null;
+        guide.style.display = 'block';
+        draw();
+      }
+    });
+
+    document.getElementById('confirm-btn').addEventListener('click', () => {
+      if (!selectedBox) return;
+
+      const scaleX = bgImage.naturalWidth / canvas.width;
+      const scaleY = bgImage.naturalHeight / canvas.height;
+
+      const cropCanvas = document.createElement('canvas');
+      const cropW = Math.round(selectedBox.w * scaleX);
+      const cropH = Math.round(selectedBox.h * scaleY);
+      cropCanvas.width = cropW;
+      cropCanvas.height = cropH;
+      const cropCtx = cropCanvas.getContext('2d');
+      
+      cropCtx.drawImage(
+        bgImage, 
+        selectedBox.x * scaleX, selectedBox.y * scaleY, cropW, cropH,
+        0, 0, cropW, cropH
+      );
+
+      const croppedBase64 = cropCanvas.toDataURL('image/png');
+      ipcRenderer.send('crop:done', {
+        x: selectedBox.x,
+        y: selectedBox.y,
+        width: selectedBox.w,
+        height: selectedBox.h,
+        base64: croppedBase64
+      });
+    });
+
+    document.getElementById('cancel-btn').addEventListener('click', () => {
+      ipcRenderer.send('crop:cancel');
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        ipcRenderer.send('crop:cancel');
+      }
+    });
+  </script>
+</body>
+</html>
