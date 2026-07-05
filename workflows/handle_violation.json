@@ -1,0 +1,41 @@
+{
+  "name": "Xử lý Vi phạm",
+  "description": "Click Khiếu nại, Click OK, và chạy luồng Tắt Live",
+  "schedule": {
+    "enabled": false,
+    "startAt": "",
+    "stopAt": "",
+    "timezone": "Asia/Ho_Chi_Minh"
+  },
+  "settings": {
+    "dryRun": false,
+    "retryCount": 0,
+    "captureOnError": true
+  },
+  "startSteps": [
+    {
+      "type": "click",
+      "name": "Click Khiếu nại",
+      "clickType": "coordinate",
+      "x": 1200,
+      "y": 600,
+      "delayBeforeSec": 0,
+      "delayAfterSec": 1
+    },
+    {
+      "type": "click",
+      "name": "Click OK",
+      "clickType": "coordinate",
+      "x": 1400,
+      "y": 600,
+      "delayBeforeSec": 0,
+      "delayAfterSec": 1
+    },
+    {
+      "type": "run_workflow",
+      "name": "Chạy luồng tắt live",
+      "workflowPath": "tat_live.json"
+    }
+  ],
+  "stopSteps": []
+}

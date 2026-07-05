@@ -1,0 +1,25 @@
+{
+  "name": "Kiểm tra Vi phạm",
+  "description": "Nếu thấy chữ 'Khả năng hiển thị LIVE đã bị hạn chế' thì chạy xử lý vi phạm",
+  "schedule": {
+    "enabled": false,
+    "startAt": "",
+    "stopAt": "",
+    "timezone": "Asia/Ho_Chi_Minh"
+  },
+  "settings": {
+    "dryRun": false,
+    "retryCount": 0,
+    "captureOnError": true
+  },
+  "startSteps": [
+    {
+      "type": "conditional_workflow",
+      "name": "Kiểm tra chữ Vi phạm",
+      "conditionType": "text",
+      "text": "Khả năng hiển thị LIVE đã bị hạn chế",
+      "thenWorkflowPath": "handle_violation.json"
+    }
+  ],
+  "stopSteps": []
+}

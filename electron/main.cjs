@@ -84,7 +84,17 @@ function createWindow() {
 ipcMain.handle("workflow:list", async () => {
   ensureWorkflowDir();
   const files = fs.readdirSync(workflowDir).filter((file) => file.endsWith(".json"));
-  return files.map((file) => path.join(workflowDir, file));
+  const userDataList = files.map((file) => path.join(workflowDir, file));
+
+  const projectWorkflowsDir = path.join(getProjectRoot(), "workflows");
+  let projectList = [];
+  if (fs.existsSync(projectWorkflowsDir)) {
+    const projectFiles = fs.readdirSync(projectWorkflowsDir).filter((file) => file.endsWith(".json"));
+    projectList = projectFiles.map((file) => path.join(projectWorkflowsDir, file));
+  }
+
+  const combined = [...userDataList, ...projectList];
+  return Array.from(new Set(combined));
 });
 
 ipcMain.handle("workflow:load", async (_event, filePath) => {

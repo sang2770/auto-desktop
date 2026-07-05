@@ -742,8 +742,38 @@ gui_lock = threading.RLock()
 active_intervals = {}
 intervals_lock = threading.Lock()
 
+def resolve_workflow_path(path_str: str) -> str:
+    if not path_str:
+        return ""
+    if os.path.isabs(path_str):
+        return path_str
+        
+    # Check relative to cwd
+    if os.path.exists(path_str):
+        return os.path.abspath(path_str)
+        
+    # Check relative to workflows subdirectory inside cwd
+    rel_workflows = os.path.join("workflows", path_str)
+    if os.path.exists(rel_workflows):
+        return os.path.abspath(rel_workflows)
+        
+    # Check relative to standard AppData directory
+    if sys.platform == "win32":
+        app_data = os.environ.get("APPDATA")
+        if app_data:
+            standard_path = os.path.join(app_data, "auto-desktop", "workflows", path_str)
+            if os.path.exists(standard_path):
+                return standard_path
+    elif sys.platform == "darwin":
+        standard_path = os.path.join(os.path.expanduser("~"), "Library", "Application Support", "auto-desktop", "workflows", path_str)
+        if os.path.exists(standard_path):
+            return standard_path
+            
+    # Fallback to absolute path
+    return os.path.abspath(path_str)
+
 def step_run_workflow(step: dict[str, Any], dry_run: bool, depth: int) -> None:
-    workflow_path = step.get("workflowPath")
+    workflow_path = resolve_workflow_path(step.get("workflowPath", ""))
     if not workflow_path:
         log("No workflowPath specified. Skipping.")
         return
@@ -814,15 +844,17 @@ def step_conditional_workflow(step: dict[str, Any], dry_run: bool, depth: int) -
     if condition_met:
         then_path = step.get("thenWorkflowPath")
         if then_path:
-            log(f"Condition MET. Running THEN workflow: {then_path}")
-            step_run_workflow({"workflowPath": then_path}, dry_run, depth)
+            then_resolved = resolve_workflow_path(then_path)
+            log(f"Condition MET. Running THEN workflow: {then_resolved}")
+            step_run_workflow({"workflowPath": then_resolved}, dry_run, depth)
         else:
             log("Condition MET, but no thenWorkflowPath specified.")
     else:
         else_path = step.get("elseWorkflowPath")
         if else_path:
-            log(f"Condition NOT met. Running ELSE workflow: {else_path}")
-            step_run_workflow({"workflowPath": else_path}, dry_run, depth)
+            else_resolved = resolve_workflow_path(else_path)
+            log(f"Condition NOT met. Running ELSE workflow: {else_resolved}")
+            step_run_workflow({"workflowPath": else_resolved}, dry_run, depth)
         else:
             log("Condition NOT met, and no elseWorkflowPath specified. Skipping.")
 
@@ -852,7 +884,7 @@ def step_check_interval(step: dict[str, Any], dry_run: bool) -> None:
 
 def interval_worker(interval_id: str, step: dict[str, Any], dry_run: bool, stop_event: threading.Event) -> None:
     interval_sec = float(step.get("intervalSec", 5))
-    action_workflow_path = step.get("actionWorkflowPath")
+    action_workflow_path = resolve_workflow_path(step.get("actionWorkflowPath", "")) if step.get("actionWorkflowPath") else None
     
     stop_cond_type = step.get("stopConditionType")
     stop_image = step.get("stopImage")

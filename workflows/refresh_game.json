@@ -1,0 +1,32 @@
+{
+  "name": "Refresh Game",
+  "description": "Click focus game and press F5",
+  "schedule": {
+    "enabled": false,
+    "startAt": "",
+    "stopAt": "",
+    "timezone": "Asia/Ho_Chi_Minh"
+  },
+  "settings": {
+    "dryRun": false,
+    "retryCount": 0,
+    "captureOnError": true
+  },
+  "startSteps": [
+    {
+      "type": "click",
+      "name": "Click focus game",
+      "clickType": "coordinate",
+      "x": 2933,
+      "y": 856,
+      "delayBeforeSec": 0,
+      "delayAfterSec": 1
+    },
+    {
+      "type": "press_key",
+      "name": "Press Key F5",
+      "key": "f5"
+    }
+  ],
+  "stopSteps": []
+}
