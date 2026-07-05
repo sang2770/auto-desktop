@@ -84,7 +84,8 @@ function StepCard({
   onMoveDown,
   isFirst,
   isLast,
-  savedWorkflows
+  savedWorkflows,
+  workflowNames
 }: {
   step: Step;
   index: number;
@@ -95,6 +96,7 @@ function StepCard({
   isFirst: boolean;
   isLast: boolean;
   savedWorkflows: string[];
+  workflowNames: Record<string, string>;
 }) {
   const isSeconds = step.type === "wait" && step.ms % 1000 === 0;
   const [waitUnit, setWaitUnit] = useState<"s" | "ms">(isSeconds ? "s" : "ms");
@@ -949,7 +951,7 @@ function StepCard({
               <option value="">-- Chọn workflow --</option>
               {savedWorkflows.map((path) => (
                 <option key={path} value={path}>
-                  {path.split(/[/\\]/).pop() || path}
+                  {workflowNames[path] || path.split(/[/\\]/).pop() || path}
                 </option>
               ))}
             </select>
@@ -1046,7 +1048,7 @@ function StepCard({
                   <option value="">-- Chọn workflow --</option>
                   {savedWorkflows.map((path) => (
                     <option key={path} value={path}>
-                      {path.split(/[/\\]/).pop() || path}
+                      {workflowNames[path] || path.split(/[/\\]/).pop() || path}
                     </option>
                   ))}
                 </select>
@@ -1061,7 +1063,7 @@ function StepCard({
                   <option value="">-- Chọn workflow (bỏ qua nếu không cần) --</option>
                   {savedWorkflows.map((path) => (
                     <option key={path} value={path}>
-                      {path.split(/[/\\]/).pop() || path}
+                      {workflowNames[path] || path.split(/[/\\]/).pop() || path}
                     </option>
                   ))}
                 </select>
@@ -1102,7 +1104,7 @@ function StepCard({
                 <option value="">-- Chọn workflow thực hiện --</option>
                 {savedWorkflows.map((path) => (
                   <option key={path} value={path}>
-                    {path.split(/[/\\]/).pop() || path}
+                    {workflowNames[path] || path.split(/[/\\]/).pop() || path}
                   </option>
                 ))}
               </select>
@@ -1371,9 +1373,35 @@ function App() {
     "Workflow mẫu được tải ở chế độ chạy thử (dry-run)."
   ]);
   const [savedWorkflows, setSavedWorkflows] = useState<string[]>([]);
+  const [workflowNames, setWorkflowNames] = useState<Record<string, string>>({});
   const [activeTab, setActiveTab] = useState<"visual" | "json">("visual");
   const [rightPanelTab, setRightPanelTab] = useState<"summary" | "logs">("summary");
 
+
+  useEffect(() => {
+    async function loadNames() {
+      const names: Record<string, string> = {};
+      for (const path of savedWorkflows) {
+        try {
+          const content = await desktopApi.loadWorkflow(path);
+          const parsed = JSON.parse(content);
+          if (parsed && parsed.name) {
+            names[path] = parsed.name;
+          } else {
+            const filename = path.split(/[/\\]/).pop() || path;
+            names[path] = filename.replace(".json", "");
+          }
+        } catch (err) {
+          const filename = path.split(/[/\\]/).pop() || path;
+          names[path] = filename.replace(".json", "");
+        }
+      }
+      setWorkflowNames(names);
+    }
+    if (savedWorkflows.length > 0) {
+      loadNames();
+    }
+  }, [savedWorkflows]);
 
   useEffect(() => {
     desktopApi
@@ -1733,10 +1761,11 @@ function App() {
             >
               <option value="" disabled>-- Chọn quy trình --</option>
               {savedWorkflows.map((path) => {
-                const filename = path.split("/").pop() || path;
+                const filename = path.split(/[/\\]/).pop() || path;
+                const displayName = workflowNames[path] || filename.replace(".json", "");
                 return (
                   <option key={path} value={path}>
-                    {filename.replace(".json", "")}
+                    {displayName}
                   </option>
                 );
               })}
@@ -1805,12 +1834,15 @@ function App() {
         <div className="sidebar-content">
           <ul className="workflow-list">
             {savedWorkflows.map((path) => {
-              const filename = path.split("/").pop() || path;
+              const filename = path.split(/[/\\]/).pop() || path;
               const isActive = loadedPath === path;
+              const displayName = path === loadedPath && workflow 
+                ? workflow.name 
+                : (workflowNames[path] || filename.replace(".json", ""));
               return (
                 <li key={path} className={`workflow-item ${isActive ? "active" : ""}`}>
                   <span className="workflow-name" onClick={() => handleLoad(path)} title={path}>
-                    📄 {filename.replace(".json", "")}
+                    📄 {displayName}
                   </span>
                   <button className="delete-item-btn" onClick={(e) => { e.stopPropagation(); handleDeleteWorkflow(path); }} title="Xóa quy trình">
                     🗑️
@@ -2048,6 +2080,7 @@ function App() {
                         isFirst={idx === 0}
                         isLast={idx === workflow.startSteps.length - 1}
                         savedWorkflows={savedWorkflows}
+                        workflowNames={workflowNames}
                       />
                     ))}
 
