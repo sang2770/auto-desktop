@@ -22,8 +22,8 @@
       "type": "conditional_workflow",
       "name": "Kiểm tra chữ Vi phạm",
       "conditionType": "image",
-      "thenWorkflowPath": "C:\\Users\\Admin\\Desktop\\auto-desktop-master\\auto-desktop-master\\workflows\\handle_violation.json",
-      "image": "C:\\Users\\Admin\\AppData\\Roaming\\auto-desktop\\workflows\\images\\crop-cond-flow-1783210132314.png",
+      "thenWorkflowPath": "C:\\Users\\Admin\\Desktop\\auto-desktop-master\\auto-desktop-master\\workflows\\x-l-vi-ph-m.json",
+      "image": "C:\\Users\\Admin\\AppData\\Roaming\\auto-desktop\\workflows\\images\\crop-cond-flow-1783304314671.png",
       "confidence": 0.8
     }
   ],

@@ -21,16 +21,17 @@
     {
       "type": "click",
       "name": "Click Khiếu nại",
-      "clickType": "text",
-      "text": "Khiếu nại",
+      "clickType": "image",
       "delayBeforeSec": 0,
       "delayAfterSec": 0,
-      "timeoutMs": 5000
+      "timeoutMs": 5000,
+      "image": "C:\\Users\\Admin\\AppData\\Roaming\\auto-desktop\\workflows\\images\\crop-click-1783304343626.png",
+      "confidence": 0.8
     },
     {
       "type": "run_workflow",
       "name": "Chạy luồng tắt live",
-      "workflowPath": "C:\\Users\\Admin\\Desktop\\auto-desktop-master\\auto-desktop-master\\workflows\\turnoff.json"
+      "workflowPath": "C:\\Users\\Admin\\Desktop\\auto-desktop-master\\auto-desktop-master\\workflows\\t-t-live.json"
     },
     {
       "type": "abort_iteration",
