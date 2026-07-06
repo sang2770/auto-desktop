@@ -184,9 +184,10 @@ ipcMain.handle("mouse:capture-position", async () => {
 
 ipcMain.handle("screen:capture-region", async () => {
   try {
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const { width, height } = primaryDisplay.size;
-    const scaleFactor = primaryDisplay.scaleFactor || 1;
+    const cursorPoint = screen.getCursorScreenPoint();
+    const targetDisplay = screen.getDisplayNearestPoint(cursorPoint) || screen.getPrimaryDisplay();
+    const { x: displayX, y: displayY, width, height } = targetDisplay.bounds;
+    const scaleFactor = targetDisplay.scaleFactor || 1;
 
     const sources = await desktopCapturer.getSources({
       types: ["screen"],
@@ -202,7 +203,7 @@ ipcMain.handle("screen:capture-region", async () => {
     }
 
     const primarySource = sources.find(
-      (s) => s.display_id === primaryDisplay.id.toString()
+      (s) => s.display_id === targetDisplay.id.toString()
     ) || sources[0];
 
     const base64Image = primarySource.thumbnail.toDataURL();
@@ -219,14 +220,15 @@ ipcMain.handle("screen:capture-region", async () => {
       const cropWin = new BrowserWindow({
         width,
         height,
-        x: 0,
-        y: 0,
+        x: displayX,
+        y: displayY,
         frame: false,
         transparent: true,
         alwaysOnTop: true,
-        fullscreen: true,
         skipTaskbar: true,
         enableLargerThanScreen: true,
+        resizable: false,
+        movable: false,
         webPreferences: {
           nodeIntegration: true,
           contextIsolation: false
@@ -247,7 +249,11 @@ ipcMain.handle("screen:capture-region", async () => {
         if (!cropWin.isDestroyed()) {
           cropWin.close();
         }
-        safeResolve(result);
+        safeResolve({
+          ...result,
+          x: result.x + displayX,
+          y: result.y + displayY
+        });
       });
 
       ipcMain.once("crop:cancel", () => {
