@@ -30,7 +30,7 @@
     {
       "type": "run_workflow",
       "name": "Chạy luồng tắt live",
-      "workflowPath": "workflows/turnoff.json"
+      "workflowPath": "C:\\Users\\Admin\\Desktop\\auto-desktop-master\\auto-desktop-master\\workflows\\turnoff.json"
     },
     {
       "type": "abort_iteration",

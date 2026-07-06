@@ -39,9 +39,9 @@ if sys.platform == "win32":
 
 # Global state for pause handling
 mouse_hook = None
-user_clicked = False
+user_input_detected = False
 last_user_activity = time.time()
-inactivity_threshold = 3.0  # seconds
+inactivity_threshold = 5.0  # seconds
 is_currently_paused = False
 runner_clicking = False
 abort_requested = False
@@ -83,16 +83,16 @@ def mouse_listener():
     HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
     
     def hook_callback(nCode, wParam, lParam):
-        global user_clicked, last_user_activity, runner_clicking
+        global user_input_detected, last_user_activity, runner_clicking
         if nCode >= 0:
             info = MSLLHOOKSTRUCT.from_address(lParam)
             is_injected = (info.flags & 1) != 0
             if not is_injected:
                 last_user_activity = time.time()
-                # Clicks: WM_LBUTTONDOWN (0x0201), WM_RBUTTONDOWN (0x0204), WM_MBUTTONDOWN (0x0207)
-                if wParam in (0x0201, 0x0204, 0x0207):
-                    if not runner_clicking:
-                        user_clicked = True
+                # Ignore synthetic events emitted by the runner itself, but pause on
+                # any real user mouse activity: move, wheel, or button interaction.
+                if not runner_clicking:
+                    user_input_detected = True
         return user32.CallNextHookEx(mouse_hook, nCode, wParam, lParam)
         
     # Maintain reference to prevent garbage collection
@@ -115,26 +115,26 @@ def mouse_listener():
         user32.DispatchMessageW(ctypes.byref(msg))
 
 def check_pause_and_wait():
-    global user_clicked, last_user_activity, is_currently_paused
+    global user_input_detected, last_user_activity, is_currently_paused
     if sys.platform != "win32":
         return
         
-    if user_clicked or is_currently_paused:
+    if user_input_detected or is_currently_paused:
         if not is_currently_paused:
             is_currently_paused = True
             log("[STATUS] PAUSED")
-            log("Workflow paused due to user interaction. Waiting for user inactivity...")
+            log(f"Workflow paused due to user mouse activity. Waiting for {int(inactivity_threshold)}s of inactivity...")
             
-        user_clicked = False
+        user_input_detected = False
         while True:
             now = time.time()
             time_since_activity = now - last_user_activity
             
-            if user_clicked:
-                user_clicked = False
+            if user_input_detected:
+                user_input_detected = False
                 last_user_activity = time.time()
                 time_since_activity = 0.0
-                log("User clicked again, resetting pause timer...")
+                log("User mouse activity detected again, resetting pause timer...")
                 
             if time_since_activity >= inactivity_threshold:
                 break
@@ -142,7 +142,20 @@ def check_pause_and_wait():
             
         is_currently_paused = False
         log("[STATUS] RESUMED")
-        log("No user interaction detected. Resuming workflow...")
+        log(f"No user mouse activity detected for {int(inactivity_threshold)}s. Resuming workflow...")
+
+
+def wait_with_pause(seconds: float, *, abortable: bool = False) -> None:
+    global abort_requested
+    remaining = max(0.0, float(seconds))
+    while remaining > 0:
+        if abortable and abort_requested:
+            log("Wait interrupted by abort request.")
+            return
+        check_pause_and_wait()
+        chunk = min(0.1, remaining)
+        time.sleep(chunk)
+        remaining -= chunk
 
 
 def capture_window_layout() -> list[dict[str, Any]]:
@@ -730,7 +743,7 @@ def step_click(step: dict[str, Any], dry_run: bool) -> None:
     delay_before = float(step.get("delayBeforeSec", 0))
     if delay_before > 0:
         log(f"Waiting {delay_before}s before click...")
-        time.sleep(delay_before)
+        wait_with_pause(delay_before, abortable=True)
 
     click_type = step.get("clickType", "coordinate")
     if click_type == "image":
@@ -886,14 +899,14 @@ def step_click(step: dict[str, Any], dry_run: bool) -> None:
     delay_after = float(step.get("delayAfterSec", 0))
     if delay_after > 0:
         log(f"Waiting {delay_after}s after click...")
-        time.sleep(delay_after)
+        wait_with_pause(delay_after, abortable=True)
 
 
 def step_double_click(step: dict[str, Any], dry_run: bool) -> None:
     delay_before = float(step.get("delayBeforeSec", 0))
     if delay_before > 0:
         log(f"Waiting {delay_before}s before double click...")
-        time.sleep(delay_before)
+        wait_with_pause(delay_before, abortable=True)
 
     click_type = step.get("clickType", "coordinate")
     interval = step.get("intervalSec", 0.15)
@@ -1050,23 +1063,13 @@ def step_double_click(step: dict[str, Any], dry_run: bool) -> None:
     delay_after = float(step.get("delayAfterSec", 0))
     if delay_after > 0:
         log(f"Waiting {delay_after}s after double click...")
-        time.sleep(delay_after)
+        wait_with_pause(delay_after, abortable=True)
 
 
 def step_wait(step: dict[str, Any]) -> None:
-    global abort_requested
     ms = step["ms"]
     log(f"Waiting {ms} ms")
-    total_sec = ms / 1000.0
-    slept = 0.0
-    while slept < total_sec:
-        if abort_requested:
-            log("Wait interrupted by abort request.")
-            break
-        check_pause_and_wait()
-        chunk = min(0.1, total_sec - slept)
-        time.sleep(chunk)
-        slept += chunk
+    wait_with_pause(ms / 1000.0, abortable=True)
 
 
 def step_wait_for_image(step: dict[str, Any], dry_run: bool) -> None:
@@ -1309,7 +1312,7 @@ def step_conditional(step: dict[str, Any], dry_run: bool) -> None:
         elif action_type == "wait":
             wait_ms = step.get("waitMs", 1000)
             log(f"Waiting {wait_ms} ms")
-            time.sleep(wait_ms / 1000)
+            wait_with_pause(wait_ms / 1000.0, abortable=True)
     else:
         log("Condition NOT met. Skipping action.")
 
@@ -1605,7 +1608,7 @@ def execute_step_list(steps: list[dict[str, Any]], dry_run: bool, label: str, st
 
         if step_delay > 0 and index < len(steps):
             log(f"Waiting {step_delay}s between steps...")
-            time.sleep(step_delay)
+            wait_with_pause(step_delay, abortable=True)
 
 def step_press_key(step: dict[str, Any], dry_run: bool) -> None:
     key = step.get("key", "f5").lower()
@@ -1722,10 +1725,24 @@ def parse_revenue_from_text(text: str) -> float:
 def format_vietnamese_money(value: float) -> str:
     return f"{int(value):,}".replace(",", ".")
 
+
+def normalize_optional_string(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def mask_secret(value: str, *, keep_start: int = 6, keep_end: int = 4) -> str:
+    if not value:
+        return "(empty)"
+    if len(value) <= keep_start + keep_end:
+        return "*" * len(value)
+    return f"{value[:keep_start]}...{value[-keep_end:]}"
+
 def step_send_telegram(step: dict[str, Any], dry_run: bool) -> None:
     global cumulative_revenue
-    bot_token = step.get("botToken")
-    chat_id = step.get("chatId")
+    bot_token = normalize_optional_string(step.get("botToken"))
+    chat_id = normalize_optional_string(step.get("chatId"))
     message = step.get("message", "")
     ocr_revenue = step.get("ocrRevenue", False)
     capture_screen = step.get("captureScreen", True)
@@ -1824,7 +1841,7 @@ def wait_until_schedule(workflow: dict[str, Any], dry_run: bool) -> None:
         return
 
     log(f"Waiting until scheduled start for {int(seconds)} second(s)")
-    time.sleep(seconds)
+    wait_with_pause(seconds)
 
 
 def execute_workflow(workflow: dict[str, Any]) -> None:
@@ -1839,10 +1856,16 @@ def execute_workflow(workflow: dict[str, Any]) -> None:
 
     settings = workflow.get("settings", {})
     deviceName = settings.get("deviceName", "Thiết bị")
-    bot_token = settings.get("telegramBotToken")
-    chat_id = settings.get("telegramChatId")
+    bot_token = normalize_optional_string(settings.get("telegramBotToken"))
+    chat_id = normalize_optional_string(settings.get("telegramChatId"))
     report_startup = settings.get("reportStartup", False)
     report_error = settings.get("reportError", False)
+
+    log(
+        "Telegram settings "
+        f"reportStartup={report_startup} reportError={report_error} "
+        f"token={mask_secret(bot_token)} chatId={'set' if chat_id else 'missing'}"
+    )
 
     if bot_token and chat_id and report_startup:
         try:
@@ -1851,6 +1874,18 @@ def execute_workflow(workflow: dict[str, Any]) -> None:
             log(f"Sent startup Telegram notification for {deviceName}")
         except Exception as e:
             log(f"Failed to send startup Telegram notification: {e}")
+    elif report_startup:
+        missing_fields = []
+        if not bot_token:
+            missing_fields.append("telegramBotToken")
+        if not chat_id:
+            missing_fields.append("telegramChatId")
+        log(
+            "Skipped startup Telegram notification because required setting(s) are missing: "
+            + ", ".join(missing_fields)
+        )
+    else:
+        log("Startup Telegram notification is disabled.")
 
     try:
         # Restore window layout if configured

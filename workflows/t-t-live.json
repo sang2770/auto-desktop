@@ -55,6 +55,26 @@
       "confidence": 0.8
     },
     {
+      "type": "send_telegram",
+      "name": "Gửi báo cáo Telegram",
+      "botToken": "8888602922:AAEcp0qsH1zpRB41qCkTBJ45XaCQZ7oKsTY",
+      "chatId": "-5402924340",
+      "message": "Báo cáo kết quả",
+      "captureScreen": true,
+      "ocrRevenue": false,
+      "region": [
+        2039,
+        476,
+        178,
+        75
+      ]
+    },
+    {
+      "type": "wait",
+      "name": "Chờ 1 giây",
+      "ms": 5000
+    },
+    {
       "type": "click",
       "name": "Click đóng",
       "clickType": "coordinate",

@@ -29,18 +29,44 @@
       "timeoutMs": 5000
     },
     {
+      "type": "wait",
+      "name": "Chờ 1 giây",
+      "ms": 5000
+    },
+    {
       "type": "press_key",
       "name": "Press Key F5",
       "key": "f5"
     },
     {
-      "type": "click",
-      "name": "Click chuột",
-      "clickType": "coordinate",
-      "delayBeforeSec": 10.1,
-      "delayAfterSec": 0,
-      "x": 1273,
-      "y": 797
+      "type": "wait",
+      "name": "Chờ 1 giây",
+      "ms": 5000
+    },
+    {
+      "type": "press_key",
+      "name": "Nhấn phím bàn phím",
+      "key": "A"
+    },
+    {
+      "type": "wait",
+      "name": "Chờ 1 giây",
+      "ms": 3000
+    },
+    {
+      "type": "press_key",
+      "name": "Nhấn phím bàn phím",
+      "key": "B"
+    },
+    {
+      "type": "wait",
+      "name": "Chờ 1 giây",
+      "ms": 4000
+    },
+    {
+      "type": "press_key",
+      "name": "Nhấn phím bàn phím",
+      "key": "enter"
     }
   ],
   "stopSteps": []

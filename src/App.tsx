@@ -1587,7 +1587,7 @@ function App() {
       cleanupStatus = desktopApi.onStatusChange((status) => {
         if (status === "paused") {
           setIsPaused(true);
-          setStatus("⏸️ Tạm dừng (Chờ người dùng dừng thao tác)...");
+          setStatus("⏸️ Tạm dừng (chờ 5 giây không có thao tác chuột)...");
         } else if (status === "running") {
           setIsPaused(false);
           setStatus("Đang chạy tự động...");

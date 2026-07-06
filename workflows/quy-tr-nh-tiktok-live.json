@@ -15,72 +15,45 @@
     "repeat": {
       "enabled": true,
       "times": 2,
-      "intervalMs": 6000
+      "intervalMs": 15000
     },
     "windowLayout": [
       {
-        "title": "Auto Desktop",
-        "x": 230,
-        "y": 74,
-        "width": 2100,
-        "height": 1380,
+        "title": "Game Launcher",
+        "x": 947,
+        "y": 19,
+        "width": 865,
+        "height": 902,
         "enabled": true
       },
       {
-        "title": "auto-desktop - Antigravity IDE - App.tsx [Administrator]",
-        "x": 3823,
-        "y": -17,
-        "width": 2913,
-        "height": 1581,
+        "title": "TikTok LIVE Studio",
+        "x": 1815,
+        "y": 19,
+        "width": 1580,
+        "height": 900,
         "enabled": true
       },
       {
-        "title": "[Extension Development Host] project - Visual Studio Code [Administrator]",
-        "x": 217,
-        "y": 46,
-        "width": 2198,
-        "height": 1364,
-        "enabled": true
-      },
-      {
-        "title": "LUPA AI Studio - Vietnam Software Lab - Collaboration Center and 5 more pages - Work - Microsoft​ Edge",
-        "x": -11,
-        "y": -11,
-        "width": 2582,
-        "height": 1550,
-        "enabled": true
-      },
-      {
-        "title": "codejam - Antigravity IDE - 276C.cpp [Administrator]",
-        "x": 3823,
-        "y": -17,
-        "width": 2913,
-        "height": 1581,
-        "enabled": true
-      },
-      {
-        "title": "Chat | [Internal] LUPA SDK Team | Microsoft Teams",
-        "x": -11,
-        "y": -11,
-        "width": 2582,
-        "height": 1550,
-        "enabled": true
-      },
-      {
-        "title": "Windows Input Experience",
-        "x": 0,
-        "y": 0,
-        "width": 2560,
-        "height": 1600,
+        "title": "Zonee - Interactive Games",
+        "x": 158,
+        "y": 25,
+        "width": 788,
+        "height": 800,
         "enabled": true
       }
-    ]
+    ],
+    "deviceName": "Máy 1",
+    "telegramBotToken": "8888602922:AAEcp0qsH1zpRB41qCkTBJ45XaCQZ7oKsTY",
+    "telegramChatId": "-5402924340",
+    "reportStartup": true,
+    "reportError": true
   },
   "startSteps": [
     {
       "type": "run_workflow",
       "name": "0. Luồng refresh game",
-      "workflowPath": "workflows/refresh_game.json"
+      "workflowPath": "C:\\Users\\Admin\\Desktop\\auto-desktop-master\\auto-desktop-master\\workflows\\l-m-m-i-game.json"
     },
     {
       "type": "click",
@@ -98,8 +71,8 @@
       "clickType": "coordinate",
       "delayBeforeSec": 6,
       "delayAfterSec": 0,
-      "x": 2698,
-      "y": 775
+      "x": 2711,
+      "y": 770
     },
     {
       "type": "wait",
@@ -126,12 +99,12 @@
       "name": "Bắt đầu check vi phạm",
       "intervalId": "check_violation",
       "intervalSec": 5,
-      "actionWorkflowPath": "workflows/check_violation.json"
+      "actionWorkflowPath": "C:\\Users\\Admin\\Desktop\\auto-desktop-master\\auto-desktop-master\\workflows\\check_violation.json"
     },
     {
       "type": "wait",
       "name": "6. Wait (live stream 30s)",
-      "ms": 30000
+      "ms": 300000
     },
     {
       "type": "clear_interval",
@@ -141,7 +114,7 @@
     {
       "type": "run_workflow",
       "name": "7. Chạy luồng tắt live",
-      "workflowPath": "workflows/turnoff.json"
+      "workflowPath": "C:\\Users\\Admin\\Desktop\\auto-desktop-master\\auto-desktop-master\\workflows\\turnoff.json"
     }
   ],
   "stopSteps": []
