@@ -17,6 +17,7 @@ npm run dev
 
 ## Build Windows `.exe`
 
+Download: https://github.com/UB-Mannheim/tesseract/wiki
 This project now supports packaging a Windows installer with Electron and bundling the Python runner as `automation_runner.exe`.
 
 ### Build machine requirements

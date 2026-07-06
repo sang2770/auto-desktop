@@ -14,7 +14,7 @@ const workflowSchema = z.object({
     timezone: z.string()
   }),
   settings: z.object({
-    dryRun: z.boolean(),
+    dryRun: z.boolean().optional(),
     retryCount: z.number().int().min(0),
     captureOnError: z.boolean(),
     stepDelaySec: z.number().min(0).optional(),
@@ -1517,13 +1517,15 @@ function App() {
   const [isPaused, setIsPaused] = useState<boolean>(false);
   const [currentStepIdx, setCurrentStepIdx] = useState<number | null>(null);
   const [failedStepIdx, setFailedStepIdx] = useState<number | null>(null);
+  const [stepErrors, setStepErrors] = useState<Record<number, string>>({});
+  const [debugOcrImage, setDebugOcrImage] = useState<string | null>(null);
 
   const [workflowText, setWorkflowText] = useState(sampleJson);
   const [loadedPath, setLoadedPath] = useState<string>("");
   const [status, setStatus] = useState<string>("Sẵn sàng");
   const [logs, setLogs] = useState<string[]>([
     "Khởi tạo trình quản lý workflow.",
-    "Workflow mẫu được tải ở chế độ chạy thử (dry-run)."
+    "Workflow mẫu đã được tải thành công."
   ]);
   const [savedWorkflows, setSavedWorkflows] = useState<string[]>([]);
   const [workflowNames, setWorkflowNames] = useState<Record<string, string>>({});
@@ -1593,6 +1595,14 @@ function App() {
       });
     }
 
+    function cleanErrorMessage(msg: string): string {
+      const wrapMatch = msg.match(/^[A-Za-z0-9_]+\((['"])(.*)\1\)$/s);
+      if (wrapMatch && wrapMatch[2]) {
+        return wrapMatch[2];
+      }
+      return msg;
+    }
+
     if (desktopApi.onLog) {
       cleanupLog = desktopApi.onLog((logLine) => {
         setLogs((current) => [logLine, ...current]);
@@ -1603,10 +1613,46 @@ function App() {
           setCurrentStepIdx(stepIdx);
         }
         
-        if (logLine.includes("ERROR:") || logLine.includes("Traceback") || logLine.includes("TimeoutError") || logLine.includes("RuntimeError")) {
+        const isErrorSignal = logLine.includes("ERROR:") || logLine.includes("Traceback") || logLine.includes("TimeoutError") || logLine.includes("RuntimeError") || logLine.includes("ValueError");
+        
+        if (isErrorSignal) {
           setCurrentStepIdx((curr) => {
             if (curr !== null) {
               setFailedStepIdx(curr);
+              
+              const isTraceback = logLine.includes("Traceback") || logLine.includes("TRACE:") || logLine.includes("File \"");
+              if (!isTraceback) {
+                let errMsg = "";
+                const errorMatch = logLine.match(/(?:ERROR:|TimeoutError:|RuntimeError:|ValueError:)\s*(.*)/i);
+                if (errorMatch && errorMatch[1]) {
+                  errMsg = cleanErrorMessage(errorMatch[1].trim());
+                } else {
+                  errMsg = logLine.replace(/^\[[^\]]+\]\s*/, "").trim();
+                }
+                
+                if (errMsg) {
+                  setStepErrors((prev) => ({ ...prev, [curr]: errMsg }));
+                }
+
+                // Auto-read debug OCR image
+                const loadDebugImg = () => {
+                  if (desktopApi.readDebugOcrImage) {
+                    desktopApi.readDebugOcrImage().then((base64) => {
+                      if (base64) {
+                        setDebugOcrImage(base64);
+                      } else {
+                        // Retry once after 200ms
+                        setTimeout(() => {
+                          desktopApi.readDebugOcrImage().then((retryBase64) => {
+                            if (retryBase64) setDebugOcrImage(retryBase64);
+                          });
+                        }, 200);
+                      }
+                    });
+                  }
+                };
+                loadDebugImg();
+              }
             }
             return curr;
           });
@@ -1847,7 +1893,7 @@ function App() {
       description: "Quy trình tự động hóa mới.",
       schedule: { enabled: false, startAt: "", stopAt: "", timezone: "Asia/Ho_Chi_Minh" },
       settings: {
-        dryRun: true,
+        dryRun: false,
         retryCount: 0,
         captureOnError: true,
         stepDelaySec: 0,
@@ -1903,6 +1949,8 @@ function App() {
     setIsPaused(false);
     setCurrentStepIdx(null);
     setFailedStepIdx(null);
+    setStepErrors({});
+    setDebugOcrImage(null);
     setStatus("Đang chạy tự động...");
     setLogs((current) => [`Trình chạy bắt đầu lúc ${new Date().toLocaleTimeString()}.`, ...current]);
     try {
@@ -1917,6 +1965,7 @@ function App() {
     } finally {
       setIsRunning(false);
       setIsPaused(false);
+      setCurrentStepIdx(null);
     }
   }
 
@@ -1979,15 +2028,6 @@ function App() {
           </div>
 
           <div className="compact-options-grid">
-            <label className="compact-checkbox-label">
-              <input
-                type="checkbox"
-                checked={workflow?.settings.dryRun ?? false}
-                disabled={!workflow}
-                onChange={(e) => updateSettings("dryRun", e.target.checked)}
-              />
-              Chạy thử
-            </label>
             <label className="compact-checkbox-label">
               <input
                 type="checkbox"
@@ -2202,16 +2242,7 @@ function App() {
                         style={{ minHeight: "60px", resize: "vertical" }}
                       />
                     </div>
-                    <div className="form-group">
-                      <label>Chế độ chạy thử (Dry Run)</label>
-                      <select
-                        value={workflow.settings.dryRun ? "true" : "false"}
-                        onChange={(e) => updateSettings("dryRun", e.target.value === "true")}
-                      >
-                        <option value="true">Bật (Chỉ mô phỏng hành động, an toàn)</option>
-                        <option value="false">Tắt (Thực hiện CLICK chuột và MỞ APP thật)</option>
-                      </select>
-                    </div>
+
                     <div className="form-group">
                       <label>Số lần thử lại khi lỗi</label>
                       <input
@@ -2551,7 +2582,7 @@ function App() {
                     <div className="summaryGrid">
                       <div>
                         <strong>Chế độ chạy</strong>
-                        <span>{parsed.value.settings.dryRun ? "Dry Run (Mô phỏng)" : "Live (Thực tế)"}</span>
+                        <span>Live (Thực tế)</span>
                       </div>
                       <div>
                         <strong>Lặp lại</strong>
@@ -2592,27 +2623,69 @@ function App() {
                               {String(index + 1).padStart(2, "0")}
                             </span>
                             <div>
-                              <strong>{step.name}</strong>
-                              {isStepCoord && (
-                                <span style={{ color: "#f59e0b", fontSize: "0.78rem", fontWeight: "bold", marginLeft: "6px" }}>
-                                  ⚠️ Cần sửa
-                                </span>
+                              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px" }}>
+                                <strong>{step.name}</strong>
+                                {isCurrent && (
+                                  <span style={{ color: "#14b8a6", fontSize: "0.75rem", fontWeight: "bold", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                                    <span className="step-spinner" style={{ margin: 0 }} /> Đang chạy...
+                                  </span>
+                                )}
+                                {isStepCoord && (
+                                  <span style={{ color: "#f59e0b", fontSize: "0.78rem", fontWeight: "bold" }}>
+                                    ⚠️ Cần sửa
+                                  </span>
+                                )}
+                              </div>
+                              <p style={{ textTransform: "capitalize", fontSize: "0.82rem", margin: "2px 0 0", opacity: 0.7 }}>
+                                {step.type === "launch_app" && "Chạy App"}
+                                {step.type === "wait" && `Chờ ${(step.ms / 1000)}s`}
+                                {step.type === "click" && `Click (${(step.clickType || "coordinate") === "coordinate" ? `Toạ độ ${step.x},${step.y}` : (step.clickType === "text" ? `Chữ: "${step.text}"` : "Khớp hình ảnh")})`}
+                                {step.type === "double_click" && `Double Click (${(step.clickType || "coordinate") === "coordinate" ? `Toạ độ ${step.x},${step.y}` : (step.clickType === "text" ? `Chữ: "${step.text}"` : "Khớp hình ảnh")})`}
+                                {step.type === "wait_for_image" && "Đợi hình ảnh"}
+                                {step.type === "check_text" && `Kiểm tra chữ: "${step.text}"`}
+                                {step.type === "conditional" && `Kiểm tra: Nếu thấy ${step.conditionType === "image" ? "ảnh" : `chữ "${step.text}"`} thì ${step.actionType}`}
+                                {step.type === "run_workflow" && `Chạy Flow Con: ${step.workflowPath ? (step.workflowPath.split(/[/\\]/).pop() || step.workflowPath) : "(Chưa chọn)"}`}
+                                {step.type === "conditional_workflow" && `Rẽ Nhánh Flow: Nếu thấy ${step.conditionType === "image" ? "ảnh" : `chữ "${step.text}"`} thì chạy Flow Con`}
+                                {step.type === "check_interval" && `Lặp Chu Kỳ: Chạy mỗi ${step.intervalSec}s cho đến khi dừng`}
+                                {step.type === "clear_interval" && `Dừng Chu Kỳ: ${step.intervalId || "(Chưa nhập ID)"}`}
+                                {step.type === "press_key" && `Nhấn phím: ${step.key.toUpperCase()}`}
+                              </p>
+                              {isFailed && (
+                                <div style={{ 
+                                  marginTop: "8px", 
+                                  padding: "8px 10px", 
+                                  background: "rgba(239, 68, 68, 0.15)", 
+                                  border: "1px solid rgba(239, 68, 68, 0.3)", 
+                                  borderRadius: "8px", 
+                                  color: "#f87171", 
+                                  fontSize: "0.8rem",
+                                  wordBreak: "break-word"
+                                }}>
+                                  <div style={{ fontWeight: "bold" }}>
+                                    ❌ Lỗi: {stepErrors[index] || "Bước này gặp sự cố."}
+                                  </div>
+                                  {debugOcrImage && (
+                                    <div style={{ marginTop: "8px" }}>
+                                      <div style={{ fontSize: "0.75rem", opacity: 0.8, marginBottom: "4px" }}>
+                                        📷 Ảnh chụp vùng quét OCR:
+                                      </div>
+                                      <img 
+                                        src={debugOcrImage} 
+                                        alt="OCR Debug Region" 
+                                        style={{ 
+                                          maxWidth: "100%", 
+                                          maxHeight: "150px", 
+                                          objectFit: "contain", 
+                                          borderRadius: "6px",
+                                          border: "1px solid rgba(255,255,255,0.1)",
+                                          background: "#000"
+                                        }} 
+                                      />
+                                    </div>
+                                  )}
+                                </div>
                               )}
-                            <p style={{ textTransform: "capitalize", fontSize: "0.82rem", margin: "2px 0 0", opacity: 0.7 }}>
-                              {step.type === "launch_app" && "Chạy App"}
-                              {step.type === "wait" && `Chờ ${(step.ms / 1000)}s`}
-                              {step.type === "click" && `Click (${(step.clickType || "coordinate") === "coordinate" ? `Toạ độ ${step.x},${step.y}` : (step.clickType === "text" ? `Chữ: "${step.text}"` : "Khớp hình ảnh")})`}
-                              {step.type === "double_click" && `Double Click (${(step.clickType || "coordinate") === "coordinate" ? `Toạ độ ${step.x},${step.y}` : (step.clickType === "text" ? `Chữ: "${step.text}"` : "Khớp hình ảnh")})`}
-                              {step.type === "wait_for_image" && "Đợi hình ảnh"}
-                              {step.type === "check_text" && `Kiểm tra chữ: "${step.text}"`}
-                              {step.type === "conditional" && `Kiểm tra: Nếu thấy ${step.conditionType === "image" ? "ảnh" : `chữ "${step.text}"`} thì ${step.actionType}`}
-                              {step.type === "run_workflow" && `Chạy Flow Con: ${step.workflowPath ? (step.workflowPath.split(/[/\\]/).pop() || step.workflowPath) : "(Chưa chọn)"}`}
-                              {step.type === "conditional_workflow" && `Rẽ Nhánh Flow: Nếu thấy ${step.conditionType === "image" ? "ảnh" : `chữ "${step.text}"`} thì chạy Flow Con`}
-                              {step.type === "check_interval" && `Lặp Chu Kỳ: Chạy mỗi ${step.intervalSec}s cho đến khi dừng`}
-                              {step.type === "clear_interval" && `Dừng Chu Kỳ: ${step.intervalId || "(Chưa nhập ID)"}`}
-                              {step.type === "press_key" && `Nhấn phím: ${step.key.toUpperCase()}`}
-                            </p>
-                          </div>
+                            </div>
                         </li>
                       )})}
                       {parsed.value.startSteps.length === 0 && (

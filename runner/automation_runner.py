@@ -19,6 +19,23 @@ import atexit
 if sys.platform == "win32":
     import win32api
     import win32con
+    import shutil
+    if not shutil.which("tesseract"):
+        common_paths = [
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        ]
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            common_paths.append(os.path.join(local_appdata, "Tesseract-OCR", "tesseract.exe"))
+        for path in common_paths:
+            if os.path.exists(path):
+                try:
+                    import pytesseract
+                    pytesseract.pytesseract.tesseract_cmd = path
+                    break
+                except Exception:
+                    pass
 
 # Global state for pause handling
 mouse_hook = None
@@ -267,7 +284,37 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
 def log(message: str) -> None:
-    print(f"[{datetime.now().isoformat(timespec='seconds')}] {message}")
+    print(f"[{datetime.now().isoformat(timespec='seconds')}] {message}", flush=True)
+
+
+def get_dpi_scale() -> float:
+    if sys.platform != "win32":
+        return 1.0
+    try:
+        import ctypes
+        hdc = ctypes.windll.user32.GetDC(0)
+        logical_w = ctypes.windll.gdi32.GetDeviceCaps(hdc, 8)      # HORZRES
+        physical_w = ctypes.windll.gdi32.GetDeviceCaps(hdc, 118)   # DESKTOPHORZRES
+        ctypes.windll.user32.ReleaseDC(0, hdc)
+        if logical_w > 0:
+            return physical_w / logical_w
+    except Exception:
+        pass
+    return 1.0
+
+
+def take_screenshot(region=None) -> Any:
+    import pyautogui
+    scale = get_dpi_scale()
+    if region and scale != 1.0:
+        scaled_region = (
+            int(region[0] * scale),
+            int(region[1] * scale),
+            int(region[2] * scale),
+            int(region[3] * scale),
+        )
+        return pyautogui.screenshot(region=scaled_region)
+    return pyautogui.screenshot(region=tuple(region) if region else None)
 
 
 def normalize_text(value: str) -> str:
@@ -305,12 +352,19 @@ def extract_text_from_screen(
     except ImportError as error:
         raise RuntimeError("pytesseract and pyautogui are required for OCR checks.") from error
 
-    screenshot = pyautogui.screenshot(region=tuple(region) if region else None)
+    screenshot = take_screenshot(region)
+    try:
+        screenshot.save("debug_ocr_region.png")
+        log("Saved OCR region screenshot to debug_ocr_region.png")
+    except Exception as e:
+        log(f"Failed to save debug OCR screenshot: {e}")
+
+    variants = prepare_ocr_variants(screenshot, threshold)
     extracted_results: list[str] = []
-    for variant in prepare_ocr_variants(screenshot, threshold):
-        extracted_results.append(
-            pytesseract.image_to_string(variant, lang=lang, config=tesseract_config).strip()
-        )
+    for idx, variant in enumerate(variants):
+        text = pytesseract.image_to_string(variant, lang=lang, config=tesseract_config).strip()
+        log(f"OCR Variant {idx} saw: '{text}'")
+        extracted_results.append(text)
 
     extracted_results.sort(key=len, reverse=True)
     return extracted_results[0] if extracted_results else ""
@@ -391,10 +445,19 @@ def safe_locate_on_screen(
     region: list[int] | None = None,
 ) -> tuple[Any | None, str | None]:
     try:
+        scale = get_dpi_scale()
+        scaled_region = None
+        if region and scale != 1.0:
+            scaled_region = (
+                int(region[0] * scale),
+                int(region[1] * scale),
+                int(region[2] * scale),
+                int(region[3] * scale),
+            )
         match = pyautogui.locateOnScreen(
             image,
             confidence=confidence,
-            region=tuple(region) if region else None,
+            region=scaled_region if scaled_region else (tuple(region) if region else None),
         )
         return match, None
     except Exception as error:
@@ -609,6 +672,12 @@ def highlight_coordinate(x: int, y: int, duration_ms: int = 500) -> None:
 
 def locate_text_in_image(img, target_text: str) -> tuple[int, int, int, int] | None:
     try:
+        try:
+            img.save("debug_ocr_region.png")
+            log("Saved OCR region screenshot to debug_ocr_region.png")
+        except Exception as e:
+            log(f"Failed to save debug OCR screenshot: {e}")
+
         from pytesseract import Output
         import pytesseract
         
@@ -695,13 +764,19 @@ def step_click(step: dict[str, Any], dry_run: bool) -> None:
                     last_locate_error = locate_error
                 if match:
                     center_point = pyautogui.center(match)
+                    scale = get_dpi_scale()
+                    click_x = center_point.x / scale
+                    click_y = center_point.y / scale
+                    
+                    highlight_coordinate(int(click_x), int(click_y))
+                    
                     mouse_before = get_mouse_position(pyautogui)
                     frontmost_before = get_frontmost_app_name()
                     log(
-                        f"Found image match={match} center=({int(center_point.x)}, {int(center_point.y)}) "
+                        f"Found image match={match} center=({int(click_x)}, {int(click_y)}) "
                         f"mouseBefore={mouse_before} frontmostBefore={frontmost_before}"
                     )
-                    screen_x, screen_y, backend = perform_click(pyautogui, center_point.x, center_point.y)
+                    screen_x, screen_y, backend = perform_click(pyautogui, click_x, click_y)
                     mouse_after = get_mouse_position(pyautogui)
                     frontmost_after = get_frontmost_app_name()
                     log(
@@ -742,16 +817,22 @@ def step_click(step: dict[str, Any], dry_run: bool) -> None:
             while time.time() - start < timeout / 1000:
                 check_pause_and_wait()
                 with gui_lock:
-                    screenshot = pyautogui.screenshot(region=tuple(region) if region else None)
+                    screenshot = take_screenshot(region)
                 
                 match_box = locate_text_in_image(screenshot, text_val)
                 if match_box:
+                    scale = get_dpi_scale()
                     left, top, width, height = match_box
+                    left_log = left / scale
+                    top_log = top / scale
+                    width_log = width / scale
+                    height_log = height / scale
+                    
                     offset_x = region[0] if region else 0
                     offset_y = region[1] if region else 0
                     
-                    center_x = offset_x + left + width // 2
-                    center_y = offset_y + top + height // 2
+                    center_x = int(offset_x + left_log + width_log / 2)
+                    center_y = int(offset_y + top_log + height_log / 2)
                     
                     highlight_coordinate(center_x, center_y)
                     
@@ -847,13 +928,19 @@ def step_double_click(step: dict[str, Any], dry_run: bool) -> None:
                     last_locate_error = locate_error
                 if match:
                     center_point = pyautogui.center(match)
+                    scale = get_dpi_scale()
+                    click_x = center_point.x / scale
+                    click_y = center_point.y / scale
+                    
+                    highlight_coordinate(int(click_x), int(click_y))
+                    
                     mouse_before = get_mouse_position(pyautogui)
                     frontmost_before = get_frontmost_app_name()
                     log(
-                        f"Found image match={match} center=({int(center_point.x)}, {int(center_point.y)}) "
+                        f"Found image match={match} center=({int(click_x)}, {int(click_y)}) "
                         f"mouseBefore={mouse_before} frontmostBefore={frontmost_before}"
                     )
-                    screen_x, screen_y, backend = perform_double_click(pyautogui, center_point.x, center_point.y, interval=interval)
+                    screen_x, screen_y, backend = perform_double_click(pyautogui, click_x, click_y, interval=interval)
                     mouse_after = get_mouse_position(pyautogui)
                     frontmost_after = get_frontmost_app_name()
                     log(
@@ -894,16 +981,22 @@ def step_double_click(step: dict[str, Any], dry_run: bool) -> None:
             while time.time() - start < timeout / 1000:
                 check_pause_and_wait()
                 with gui_lock:
-                    screenshot = pyautogui.screenshot(region=tuple(region) if region else None)
+                    screenshot = take_screenshot(region)
                 
                 match_box = locate_text_in_image(screenshot, text_val)
                 if match_box:
+                    scale = get_dpi_scale()
                     left, top, width, height = match_box
+                    left_log = left / scale
+                    top_log = top / scale
+                    width_log = width / scale
+                    height_log = height / scale
+                    
                     offset_x = region[0] if region else 0
                     offset_y = region[1] if region else 0
                     
-                    center_x = offset_x + left + width // 2
-                    center_y = offset_y + top + height // 2
+                    center_x = int(offset_x + left_log + width_log / 2)
+                    center_y = int(offset_y + top_log + height_log / 2)
                     
                     highlight_coordinate(center_x, center_y)
                     
@@ -1090,7 +1183,12 @@ def step_conditional(step: dict[str, Any], dry_run: bool) -> None:
             try:
                 import pyautogui
                 import pytesseract
-                screenshot = pyautogui.screenshot(region=tuple(region) if region else None)
+                screenshot = take_screenshot(region)
+                try:
+                    screenshot.save("debug_ocr_region.png")
+                    log("Saved OCR region screenshot to debug_ocr_region.png")
+                except Exception as e:
+                    log(f"Failed to save debug OCR screenshot: {e}")
                 extracted = pytesseract.image_to_string(screenshot)
                 condition_met = text.lower() in extracted.lower()
             except Exception as err:
@@ -1314,7 +1412,12 @@ def step_conditional_workflow(step: dict[str, Any], dry_run: bool, depth: int) -
                 import pyautogui
                 import pytesseract
                 with gui_lock:
-                    screenshot = pyautogui.screenshot(region=tuple(region) if region else None)
+                    screenshot = take_screenshot(region)
+                try:
+                    screenshot.save("debug_ocr_region.png")
+                    log("Saved OCR region screenshot to debug_ocr_region.png")
+                except Exception as e:
+                    log(f"Failed to save debug OCR screenshot: {e}")
                 extracted = pytesseract.image_to_string(screenshot)
                 condition_met = text.lower() in extracted.lower()
             except Exception as err:
@@ -1396,7 +1499,12 @@ def interval_worker(interval_id: str, step: dict[str, Any], dry_run: bool, stop_
                     import pyautogui
                     import pytesseract
                     with gui_lock:
-                        screenshot = pyautogui.screenshot(region=tuple(stop_region) if stop_region else None)
+                        screenshot = take_screenshot(stop_region)
+                    try:
+                        screenshot.save("debug_ocr_region.png")
+                        log("Saved OCR region screenshot to debug_ocr_region.png")
+                    except Exception as e:
+                        log(f"Failed to save debug OCR screenshot: {e}")
                     extracted = pytesseract.image_to_string(screenshot)
                     condition_met = stop_text.lower() in extracted.lower()
                 except Exception as err:
@@ -1672,12 +1780,7 @@ def step_send_telegram(step: dict[str, Any], dry_run: bool) -> None:
 
         if not photo_bytes and capture_screen:
             try:
-                import pyautogui
-                if region and isinstance(region, list) and len(region) == 4:
-                    region_tuple = tuple(int(x) for x in region)
-                else:
-                    region_tuple = None
-                screenshot = pyautogui.screenshot(region=region_tuple)
+                screenshot = take_screenshot(region)
                 import io
                 img_byte_arr = io.BytesIO()
                 screenshot.save(img_byte_arr, format='PNG')
@@ -1754,7 +1857,7 @@ def execute_workflow(workflow: dict[str, Any]) -> None:
         window_layout = settings.get("windowLayout")
         if window_layout and isinstance(window_layout, list):
             restore_window_layout(window_layout)
-        dry_run = settings.get("dryRun", True)
+        dry_run = False  # Forced to always run for real
         step_delay = float(settings.get("stepDelaySec", 0))
         start_steps = cast(list[dict[str, Any]], workflow["startSteps"])
         stop_steps = cast(list[dict[str, Any]], workflow["stopSteps"])

@@ -10,7 +10,7 @@ export const sampleWorkflow: Workflow = {
     timezone: "Asia/Ho_Chi_Minh"
   },
   settings: {
-    dryRun: true,
+    dryRun: false,
     retryCount: 2,
     captureOnError: true
   },

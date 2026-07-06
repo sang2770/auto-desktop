@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("desktopApi", {
   stopWorkflow: () => ipcRenderer.invoke("runner:stop"),
   saveImage: (payload) => ipcRenderer.invoke("image:save", payload),
   readImage: (filePath) => ipcRenderer.invoke("image:read", filePath),
+  readDebugOcrImage: () => ipcRenderer.invoke("image:read-debug-ocr"),
   captureMousePosition: () => ipcRenderer.invoke("mouse:capture-position"),
   captureRegion: () => ipcRenderer.invoke("screen:capture-region"),
   setWindowSize: (width, height) => ipcRenderer.invoke("window:set-size", width, height),

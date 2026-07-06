@@ -210,6 +210,7 @@ declare global {
       stopWorkflow: () => Promise<boolean>;
       saveImage: (payload: { name: string; base64: string }) => Promise<string>;
       readImage: (filePath: string) => Promise<string>;
+      readDebugOcrImage: () => Promise<string>;
       captureMousePosition: () => Promise<{ x: number; y: number } | null>;
       captureRegion: () => Promise<{ x: number; y: number; width: number; height: number; base64: string } | null>;
       onStatusChange?: (callback: (status: "running" | "paused") => void) => () => void;

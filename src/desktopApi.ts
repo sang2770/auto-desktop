@@ -18,6 +18,7 @@ type DesktopApi = {
   stopWorkflow: () => Promise<boolean>;
   saveImage: (payload: { name: string; base64: string }) => Promise<string>;
   readImage: (filePath: string) => Promise<string>;
+  readDebugOcrImage: () => Promise<string>;
   captureMousePosition: () => Promise<{ x: number; y: number } | null>;
   captureRegion: () => Promise<{ x: number; y: number; width: number; height: number; base64: string } | null>;
   setWindowSize?: (width: number, height: number) => Promise<boolean>;
@@ -107,6 +108,9 @@ const browserApi: DesktopApi = {
   async readImage(filePath) {
     // In browser, file path is the base64 URL itself
     return filePath;
+  },
+  async readDebugOcrImage() {
+    return "";
   },
   async captureMousePosition() {
     return { x: 800, y: 450 };

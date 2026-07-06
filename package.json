@@ -12,6 +12,7 @@
     "build:app": "vite build",
     "build:runner:win": "node scripts/build-runner-win.cjs",
     "dist:win": "npm run build:app && npm run build:runner:win && electron-builder --win nsis",
+    "dist:win:portable": "npm run build:app && npm run build:runner:win && electron-builder --win portable",
     "pack:win": "npm run build:app && npm run build:runner:win && electron-builder --win dir",
     "preview": "vite preview"
   },
@@ -57,13 +58,22 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
         }
-      ],
-      "artifactName": "Auto-Desktop-Setup-${version}.${ext}"
+      ]
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Auto-Desktop-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Auto-Desktop-Portable-${version}.${ext}"
     }
   }
 }

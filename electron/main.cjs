@@ -52,7 +52,7 @@ function resolveRunnerCommand() {
 
   return {
     command: resolvePythonCommand(),
-    args: [getRunnerScriptPath()]
+    args: ["-u", getRunnerScriptPath()]
   };
 }
 
@@ -160,6 +160,16 @@ ipcMain.handle("image:read", async (_event, filePath) => {
   const buffer = fs.readFileSync(filePath);
   const ext = path.extname(filePath).slice(1) || "png";
   return `data:image/${ext};base64,${buffer.toString("base64")}`;
+});
+
+ipcMain.handle("image:read-debug-ocr", async () => {
+  const rootDir = app.isPackaged ? process.resourcesPath : getProjectRoot();
+  const filePath = path.join(rootDir, "debug_ocr_region.png");
+  if (!fs.existsSync(filePath)) {
+    return "";
+  }
+  const buffer = fs.readFileSync(filePath);
+  return `data:image/png;base64,${buffer.toString("base64")}`;
 });
 
 ipcMain.handle("mouse:capture-position", async () => {

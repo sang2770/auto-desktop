@@ -22,6 +22,17 @@ function resolvePythonLauncher() {
     return { command: process.env.PYTHON_PATH, prefixArgs: [] };
   }
 
+  // Check if virtual environment exists in project root
+  const venvDir = path.join(projectRoot, ".venv");
+  if (fs.existsSync(venvDir)) {
+    const venvPython = process.platform === "win32"
+      ? path.join(venvDir, "Scripts", "python.exe")
+      : path.join(venvDir, "bin", "python");
+    if (fs.existsSync(venvPython)) {
+      return { command: venvPython, prefixArgs: [] };
+    }
+  }
+
   const candidates = process.platform === "win32"
     ? [
         { command: "py", prefixArgs: ["-3"] },
