@@ -20,17 +20,21 @@
   "startSteps": [
     {
       "type": "click",
-      "name": "Click chuột",
-      "clickType": "coordinate",
+      "name": "Click Khiếu nại",
+      "clickType": "text",
+      "text": "Khiếu nại",
       "delayBeforeSec": 0,
       "delayAfterSec": 0,
-      "x": 0,
-      "y": 0
+      "timeoutMs": 5000
     },
     {
       "type": "run_workflow",
       "name": "Chạy luồng tắt live",
-      "workflowPath": "C:\\Users\\Admin\\Downloads\\auto-desktop-master\\workflows\\tat_live.json"
+      "workflowPath": "workflows/turnoff.json"
+    },
+    {
+      "type": "abort_iteration",
+      "name": "Hủy phiên Live hiện tại"
     }
   ],
   "stopSteps": []

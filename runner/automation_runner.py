@@ -14,10 +14,249 @@ from typing import cast
 from zoneinfo import ZoneInfo
 import threading
 import os
+import atexit
 
 if sys.platform == "win32":
     import win32api
     import win32con
+
+# Global state for pause handling
+mouse_hook = None
+user_clicked = False
+last_user_activity = time.time()
+inactivity_threshold = 3.0  # seconds
+is_currently_paused = False
+runner_clicking = False
+abort_requested = False
+cumulative_revenue = 0.0
+
+def cleanup_hook():
+    global mouse_hook
+    if mouse_hook:
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            user32.UnhookWindowsHookEx(mouse_hook)
+        except Exception:
+            pass
+        mouse_hook = None
+
+if sys.platform == "win32":
+    atexit.register(cleanup_hook)
+
+def mouse_listener():
+    global mouse_hook
+    import ctypes
+    from ctypes import wintypes
+    
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    
+    WH_MOUSE_LL = 14
+    
+    class MSLLHOOKSTRUCT(ctypes.Structure):
+        _fields_ = [
+            ("pt", wintypes.POINT),
+            ("mouseData", wintypes.DWORD),
+            ("flags", wintypes.DWORD),
+            ("time", wintypes.DWORD),
+            ("dwExtraInfo", ctypes.c_ulonglong)
+        ]
+        
+    HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+    
+    def hook_callback(nCode, wParam, lParam):
+        global user_clicked, last_user_activity, runner_clicking
+        if nCode >= 0:
+            info = MSLLHOOKSTRUCT.from_address(lParam)
+            is_injected = (info.flags & 1) != 0
+            if not is_injected:
+                last_user_activity = time.time()
+                # Clicks: WM_LBUTTONDOWN (0x0201), WM_RBUTTONDOWN (0x0204), WM_MBUTTONDOWN (0x0207)
+                if wParam in (0x0201, 0x0204, 0x0207):
+                    if not runner_clicking:
+                        user_clicked = True
+        return user32.CallNextHookEx(mouse_hook, nCode, wParam, lParam)
+        
+    # Maintain reference to prevent garbage collection
+    mouse_listener.pointer = HOOKPROC(hook_callback)
+    
+    mouse_hook = user32.SetWindowsHookExW(
+        WH_MOUSE_LL,
+        mouse_listener.pointer,
+        kernel32.GetModuleHandleW(None),
+        0
+    )
+    
+    if not mouse_hook:
+        log("Failed to install mouse hook")
+        return
+        
+    msg = wintypes.MSG()
+    while user32.GetMessageW(ctypes.byref(msg), 0, 0, 0) != 0:
+        user32.TranslateMessage(ctypes.byref(msg))
+        user32.DispatchMessageW(ctypes.byref(msg))
+
+def check_pause_and_wait():
+    global user_clicked, last_user_activity, is_currently_paused
+    if sys.platform != "win32":
+        return
+        
+    if user_clicked or is_currently_paused:
+        if not is_currently_paused:
+            is_currently_paused = True
+            log("[STATUS] PAUSED")
+            log("Workflow paused due to user interaction. Waiting for user inactivity...")
+            
+        user_clicked = False
+        while True:
+            now = time.time()
+            time_since_activity = now - last_user_activity
+            
+            if user_clicked:
+                user_clicked = False
+                last_user_activity = time.time()
+                time_since_activity = 0.0
+                log("User clicked again, resetting pause timer...")
+                
+            if time_since_activity >= inactivity_threshold:
+                break
+            time.sleep(0.1)
+            
+        is_currently_paused = False
+        log("[STATUS] RESUMED")
+        log("No user interaction detected. Resuming workflow...")
+
+
+def capture_window_layout() -> list[dict[str, Any]]:
+    if sys.platform != "win32":
+        return []
+        
+    import win32gui
+    import win32process
+    import os
+    
+    my_pid = os.getpid()
+    parent_pid = os.getppid()
+    
+    layout = []
+    
+    def enum_cb(hwnd, extra):
+        if not win32gui.IsWindowVisible(hwnd):
+            return True
+            
+        title = win32gui.GetWindowText(hwnd)
+        if not title:
+            return True
+            
+        # Filter out system and own process windows
+        try:
+            _, win_pid = win32process.GetWindowThreadProcessId(hwnd)
+        except Exception:
+            return True
+            
+        if win_pid in (my_pid, parent_pid):
+            return True
+            
+        # Filter out common Windows background windows
+        if title in ("Program Manager", "Settings", "Start", "Start menu"):
+            return True
+            
+        # Get position and size
+        try:
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+        except Exception:
+            return True
+            
+        w = right - left
+        h = bottom - top
+        
+        # Filter out tiny or empty windows
+        if w <= 100 or h <= 100:
+            return True
+            
+        layout.append({
+            "title": title,
+            "x": left,
+            "y": top,
+            "width": w,
+            "height": h,
+            "enabled": True
+        })
+        return True
+        
+    try:
+        win32gui.EnumWindows(enum_cb, None)
+    except Exception as e:
+        log(f"Error enumerating windows: {e}")
+        
+    return layout
+
+
+def restore_window_layout(layout: list[dict[str, Any]]) -> None:
+    if sys.platform != "win32" or not layout:
+        return
+        
+    import win32gui
+    import win32con
+    
+    log(f"Restoring layout for {len(layout)} window(s)...")
+    
+    # Build list of active visible windows
+    open_windows = []
+    def enum_cb(hwnd, extra):
+        if win32gui.IsWindowVisible(hwnd):
+            title = win32gui.GetWindowText(hwnd)
+            if title:
+                open_windows.append((hwnd, title))
+        return True
+    try:
+        win32gui.EnumWindows(enum_cb, None)
+    except Exception as e:
+        log(f"Error enumerating windows for restore: {e}")
+        return
+        
+    for item in layout:
+        if not item.get("enabled", True):
+            continue
+            
+        target_title = item.get("title", "")
+        if not target_title:
+            continue
+            
+        # Find matching window by title substring match
+        matched_hwnd = None
+        for hwnd, title in open_windows:
+            if target_title.lower() in title.lower():
+                matched_hwnd = hwnd
+                break
+                
+        if matched_hwnd:
+            x = int(item["x"])
+            y = int(item["y"])
+            w = int(item["width"])
+            h = int(item["height"])
+            log(f"Restoring window '{target_title}' to position ({x}, {y}) size {w}x{h}")
+            
+            try:
+                # Restore window if minimized
+                if win32gui.IsIconic(matched_hwnd):
+                    # SW_RESTORE = 9
+                    win32gui.ShowWindow(matched_hwnd, 9)
+                    time.sleep(0.1)
+                
+                # SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010
+                win32gui.SetWindowPos(
+                    matched_hwnd, 
+                    0, 
+                    x, y, w, h, 
+                    0x0004 | 0x0010
+                )
+            except Exception as e:
+                log(f"Failed to move window '{target_title}': {e}")
+        else:
+            log(f"Could not find active window matching title '{target_title}' to restore.")
+
 
 import sys
 
@@ -249,39 +488,45 @@ def perform_darwin_click(x: int, y: int, click_count: int = 1, button: str = "le
     return True, "quartz"
 
 def perform_click(pyautogui, x, y, button="left"):
-    screen_x = int(x)
-    screen_y = int(y)
+    global runner_clicking
+    runner_clicking = True
+    try:
+        screen_x = int(x)
+        screen_y = int(y)
 
-    if sys.platform == "win32":
-        win32api.SetCursorPos((screen_x, screen_y))
-        time.sleep(0.03)
+        if sys.platform == "win32":
+            win32api.SetCursorPos((screen_x, screen_y))
+            time.sleep(0.03)
 
-        if button == "right":
-            win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTDOWN, 0, 0)
-            time.sleep(0.03)
-            win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTUP, 0, 0)
-            backend = "pywin32"
-        else:
-            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0)
-            time.sleep(0.03)
-            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0)
-            backend = "pywin32"
+            if button == "right":
+                win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTDOWN, 0, 0)
+                time.sleep(0.03)
+                win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTUP, 0, 0)
+                backend = "pywin32"
+            else:
+                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0)
+                time.sleep(0.03)
+                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0)
+                backend = "pywin32"
+
+            return screen_x, screen_y, backend
+
+        # macOS
+        darwin_success, backend = perform_darwin_click(
+            screen_x,
+            screen_y,
+            click_count=1,
+            button=button,
+        )
+
+        if not darwin_success:
+            pyautogui.click(x=screen_x, y=screen_y, button=button)
+            backend = f"pyautogui:{backend}"
 
         return screen_x, screen_y, backend
-
-    # macOS
-    darwin_success, backend = perform_darwin_click(
-        screen_x,
-        screen_y,
-        click_count=1,
-        button=button,
-    )
-
-    if not darwin_success:
-        pyautogui.click(x=screen_x, y=screen_y, button=button)
-        backend = f"pyautogui:{backend}"
-
-    return screen_x, screen_y, backend
+    finally:
+        time.sleep(0.05)
+        runner_clicking = False
 
 
 def perform_double_click(
@@ -291,26 +536,14 @@ def perform_double_click(
     interval: float = 0.15,
     button: str = "left",
 ) -> tuple[int, int, str]:
-    screen_x = to_screen_int(x)
-    screen_y = to_screen_int(y)
-    frontmost_before = get_frontmost_app_name()
-    darwin_success, backend = perform_darwin_click(screen_x, screen_y, click_count=2, button=button)
-    if not darwin_success:
-        pyautogui.moveTo(screen_x, screen_y)
-        pyautogui.mouseDown(x=screen_x, y=screen_y, button=button)
-        time.sleep(0.07)
-        pyautogui.mouseUp(x=screen_x, y=screen_y, button=button)
-        time.sleep(interval)
-        pyautogui.mouseDown(x=screen_x, y=screen_y, button=button)
-        time.sleep(0.07)
-        pyautogui.mouseUp(x=screen_x, y=screen_y, button=button)
-        backend = f"pyautogui-fallback:{backend}"
-    frontmost_after = get_frontmost_app_name()
-    if should_repeat_after_focus_change(frontmost_before, frontmost_after):
-        log(f"Focus changed during double click: {frontmost_before} -> {frontmost_after}. Repeating double click at same point.")
-        time.sleep(0.2)
-        retry_success, retry_backend = perform_darwin_click(screen_x, screen_y, click_count=2, button=button)
-        if not retry_success:
+    global runner_clicking
+    runner_clicking = True
+    try:
+        screen_x = to_screen_int(x)
+        screen_y = to_screen_int(y)
+        frontmost_before = get_frontmost_app_name()
+        darwin_success, backend = perform_darwin_click(screen_x, screen_y, click_count=2, button=button)
+        if not darwin_success:
             pyautogui.moveTo(screen_x, screen_y)
             pyautogui.mouseDown(x=screen_x, y=screen_y, button=button)
             time.sleep(0.07)
@@ -319,9 +552,27 @@ def perform_double_click(
             pyautogui.mouseDown(x=screen_x, y=screen_y, button=button)
             time.sleep(0.07)
             pyautogui.mouseUp(x=screen_x, y=screen_y, button=button)
-            retry_backend = f"pyautogui-fallback:{retry_backend}"
-        backend = f"{backend}+focus-retry:{retry_backend}"
-    return screen_x, screen_y, backend
+            backend = f"pyautogui-fallback:{backend}"
+        frontmost_after = get_frontmost_app_name()
+        if should_repeat_after_focus_change(frontmost_before, frontmost_after):
+            log(f"Focus changed during double click: {frontmost_before} -> {frontmost_after}. Repeating double click at same point.")
+            time.sleep(0.2)
+            retry_success, retry_backend = perform_darwin_click(screen_x, screen_y, click_count=2, button=button)
+            if not retry_success:
+                pyautogui.moveTo(screen_x, screen_y)
+                pyautogui.mouseDown(x=screen_x, y=screen_y, button=button)
+                time.sleep(0.07)
+                pyautogui.mouseUp(x=screen_x, y=screen_y, button=button)
+                time.sleep(interval)
+                pyautogui.mouseDown(x=screen_x, y=screen_y, button=button)
+                time.sleep(0.07)
+                pyautogui.mouseUp(x=screen_x, y=screen_y, button=button)
+                retry_backend = f"pyautogui-fallback:{retry_backend}"
+            backend = f"{backend}+focus-retry:{retry_backend}"
+        return screen_x, screen_y, backend
+    finally:
+        time.sleep(0.05)
+        runner_clicking = False
 
 
 def highlight_coordinate(x: int, y: int, duration_ms: int = 500) -> None:
@@ -438,6 +689,7 @@ def step_click(step: dict[str, Any], dry_run: bool) -> None:
             found = False
             last_locate_error: str | None = None
             while time.time() - start < timeout / 1000:
+                check_pause_and_wait()
                 match, locate_error = safe_locate_on_screen(pyautogui, image, confidence=confidence, region=region)
                 if locate_error:
                     last_locate_error = locate_error
@@ -488,6 +740,7 @@ def step_click(step: dict[str, Any], dry_run: bool) -> None:
             start = time.time()
             found = False
             while time.time() - start < timeout / 1000:
+                check_pause_and_wait()
                 with gui_lock:
                     screenshot = pyautogui.screenshot(region=tuple(region) if region else None)
                 
@@ -588,6 +841,7 @@ def step_double_click(step: dict[str, Any], dry_run: bool) -> None:
             found = False
             last_locate_error: str | None = None
             while time.time() - start < timeout / 1000:
+                check_pause_and_wait()
                 match, locate_error = safe_locate_on_screen(pyautogui, image, confidence=confidence, region=region)
                 if locate_error:
                     last_locate_error = locate_error
@@ -638,6 +892,7 @@ def step_double_click(step: dict[str, Any], dry_run: bool) -> None:
             start = time.time()
             found = False
             while time.time() - start < timeout / 1000:
+                check_pause_and_wait()
                 with gui_lock:
                     screenshot = pyautogui.screenshot(region=tuple(region) if region else None)
                 
@@ -706,12 +961,23 @@ def step_double_click(step: dict[str, Any], dry_run: bool) -> None:
 
 
 def step_wait(step: dict[str, Any]) -> None:
+    global abort_requested
     ms = step["ms"]
     log(f"Waiting {ms} ms")
-    time.sleep(ms / 1000)
+    total_sec = ms / 1000.0
+    slept = 0.0
+    while slept < total_sec:
+        if abort_requested:
+            log("Wait interrupted by abort request.")
+            break
+        check_pause_and_wait()
+        chunk = min(0.1, total_sec - slept)
+        time.sleep(chunk)
+        slept += chunk
 
 
 def step_wait_for_image(step: dict[str, Any], dry_run: bool) -> None:
+    global abort_requested
     image = step["image"]
     timeout = step.get("timeoutMs", 5000)
     confidence = step.get("confidence", 0.8)
@@ -729,6 +995,10 @@ def step_wait_for_image(step: dict[str, Any], dry_run: bool) -> None:
     start = time.time()
     last_locate_error: str | None = None
     while time.time() - start < timeout / 1000:
+        if abort_requested:
+            log("Wait for image interrupted by abort request.")
+            return
+        check_pause_and_wait()
         match, locate_error = safe_locate_on_screen(pyautogui, image, confidence=confidence, region=region)
         if locate_error:
             last_locate_error = locate_error
@@ -743,6 +1013,7 @@ def step_wait_for_image(step: dict[str, Any], dry_run: bool) -> None:
 
 
 def step_check_text(step: dict[str, Any], dry_run: bool) -> None:
+    global abort_requested
     text = step["text"]
     timeout = step.get("timeoutMs", 5000)
     region = step.get("region")
@@ -761,6 +1032,10 @@ def step_check_text(step: dict[str, Any], dry_run: bool) -> None:
     start = time.time()
     last_extracted = ""
     while time.time() - start < timeout / 1000:
+        if abort_requested:
+            log("Check text interrupted by abort request.")
+            return
+        check_pause_and_wait()
         extracted = extract_text_from_screen(
             region=region,
             lang=lang,
@@ -780,6 +1055,7 @@ def step_check_text(step: dict[str, Any], dry_run: bool) -> None:
 
 
 def step_conditional(step: dict[str, Any], dry_run: bool) -> None:
+    check_pause_and_wait()
     condition_type = step.get("conditionType", "image")
     region = step.get("region")
     condition_met = False
@@ -1001,6 +1277,7 @@ def step_run_workflow(step: dict[str, Any], dry_run: bool, depth: int) -> None:
     execute_step_list(sub_stop_steps, sub_dry_run, f"sub-flow stop ({os.path.basename(workflow_path)})", sub_step_delay, depth + 1)
 
 def step_conditional_workflow(step: dict[str, Any], dry_run: bool, depth: int) -> None:
+    check_pause_and_wait()
     condition_type = step.get("conditionType", "image")
     region = step.get("region")
     condition_met = False
@@ -1141,6 +1418,7 @@ def interval_worker(interval_id: str, step: dict[str, Any], dry_run: bool, stop_
                 
         sleep_start = time.time()
         while time.time() - sleep_start < interval_sec:
+            check_pause_and_wait()
             if stop_event.is_set():
                 break
             time.sleep(0.1)
@@ -1168,8 +1446,13 @@ def step_clear_interval(step: dict[str, Any]) -> None:
             log(f"Interval {interval_id} not found or already stopped.")
 
 def execute_step_list(steps: list[dict[str, Any]], dry_run: bool, label: str, step_delay: float = 0.0, depth: int = 0) -> None:
+    global abort_requested
     log(f"Running {label} sequence with {len(steps)} step(s)")
     for index, step in enumerate(steps, start=1):
+        if abort_requested:
+            log("Execution aborted due to background signal.")
+            break
+        check_pause_and_wait()
         step_type = step["type"]
         log(f"Step {index}/{len(steps)}: {step.get('name', step_type)} [{step_type}]")
 
@@ -1203,6 +1486,12 @@ def execute_step_list(steps: list[dict[str, Any]], dry_run: bool, label: str, st
         elif step_type == "press_key":
             with gui_lock:
                 step_press_key(step, dry_run)
+        elif step_type == "abort_iteration":
+            abort_requested = True
+            log("Abort iteration request set.")
+        elif step_type == "send_telegram":
+            with gui_lock:
+                step_send_telegram(step, dry_run)
         else:
             raise ValueError(f"Unsupported step type: {step_type}")
 
@@ -1222,6 +1511,183 @@ def step_press_key(step: dict[str, Any], dry_run: bool) -> None:
         except Exception as err:
             log(f"Error pressing key {key}: {err}")
             raise
+
+def send_telegram_message(bot_token: str, chat_id: str, message: str, photo_bytes: bytes = None) -> None:
+    import urllib.request
+    import urllib.error
+    import urllib.parse
+    
+    if photo_bytes:
+        boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW"
+        parts = []
+        
+        parts.append(f"--{boundary}".encode('utf-8'))
+        parts.append(b'Content-Disposition: form-data; name="chat_id"')
+        parts.append(b'')
+        parts.append(str(chat_id).encode('utf-8'))
+        
+        if message:
+            parts.append(f"--{boundary}".encode('utf-8'))
+            parts.append(b'Content-Disposition: form-data; name="caption"')
+            parts.append(b'')
+            parts.append(message.encode('utf-8'))
+            
+        parts.append(f"--{boundary}".encode('utf-8'))
+        parts.append(b'Content-Disposition: form-data; name="photo"; filename="screenshot.png"')
+        parts.append(b'Content-Type: image/png')
+        parts.append(b'')
+        parts.append(photo_bytes)
+        
+        parts.append(f"--{boundary}--".encode('utf-8'))
+        parts.append(b'')
+        
+        body = b'\r\n'.join(parts)
+        url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+        headers = {
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Content-Length": str(len(body))
+        }
+    else:
+        data = urllib.parse.urlencode({
+            "chat_id": chat_id,
+            "text": message
+        }).encode('utf-8')
+        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        body = data
+        
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as response:
+            res_data = response.read().decode('utf-8')
+            log(f"Telegram notification sent: {res_data}")
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode('utf-8')
+        raise RuntimeError(f"Telegram API failed ({e.code}): {err_body}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to send Telegram notification: {e}")
+
+def parse_revenue_from_text(text: str) -> float:
+    import re
+    text_upper = text.upper().strip()
+    match = re.search(r'[\d.,]+', text_upper)
+    if not match:
+        return 0.0
+        
+    num_str = match.group(0)
+    
+    if num_str.count('.') > 1:
+        num_str = num_str.replace('.', '')
+    if num_str.count(',') > 1:
+        num_str = num_str.replace(',', '')
+        
+    if ',' in num_str and '.' in num_str:
+        comma_idx = num_str.index(',')
+        dot_idx = num_str.index('.')
+        if comma_idx < dot_idx:
+            num_str = num_str.replace(',', '')
+        else:
+            num_str = num_str.replace('.', '').replace(',', '.')
+    elif ',' in num_str:
+        parts = num_str.split(',')
+        if len(parts) == 2 and len(parts[1]) in (1, 2):
+            num_str = num_str.replace(',', '.')
+        else:
+            num_str = num_str.replace(',', '')
+    elif '.' in num_str:
+        parts = num_str.split('.')
+        if len(parts) == 2 and len(parts[1]) == 3:
+            num_str = num_str.replace('.', '')
+            
+    try:
+        val = float(num_str)
+        if 'K' in text_upper:
+            val *= 1000
+        elif 'M' in text_upper:
+            val *= 1000000
+        return val
+    except ValueError:
+        return 0.0
+
+def format_vietnamese_money(value: float) -> str:
+    return f"{int(value):,}".replace(",", ".")
+
+def step_send_telegram(step: dict[str, Any], dry_run: bool) -> None:
+    global cumulative_revenue
+    bot_token = step.get("botToken")
+    chat_id = step.get("chatId")
+    message = step.get("message", "")
+    ocr_revenue = step.get("ocrRevenue", False)
+    capture_screen = step.get("captureScreen", True)
+    region = step.get("region")
+    image_path = step.get("image")
+    
+    if not bot_token or not chat_id:
+        raise ValueError("botToken and chatId are required for send_telegram step.")
+        
+    if dry_run:
+        if ocr_revenue:
+            log(f"DRY RUN send_telegram OCR revenue to chatId={chat_id} message='{message}' region={region}")
+        else:
+            log(f"DRY RUN send_telegram to chatId={chat_id} message='{message}' image={image_path} captureScreen={capture_screen} region={region}")
+        return
+        
+    if ocr_revenue:
+        try:
+            log(f"Performing OCR on region={region} to detect revenue...")
+            extracted_text = extract_text_from_screen(
+                region=region,
+                lang="eng",
+                tesseract_config="--psm 6",
+                threshold=None
+            )
+            log(f"OCR extracted text: '{extracted_text}'")
+            current_val = parse_revenue_from_text(extracted_text)
+            cumulative_revenue += current_val
+            log(f"Parsed current revenue: {current_val} (formatted: {format_vietnamese_money(current_val)})")
+            log(f"Cumulative total revenue: {cumulative_revenue} (formatted: {format_vietnamese_money(cumulative_revenue)})")
+            
+            current_str = format_vietnamese_money(current_val)
+            total_str = format_vietnamese_money(cumulative_revenue)
+            formatted_message = message.replace("{current}", current_str).replace("{total}", total_str)
+            
+            send_telegram_message(bot_token, chat_id, formatted_message, photo_bytes=None)
+        except Exception as e:
+            log(f"Failed to perform OCR revenue or send message: {e}")
+            raise
+    else:
+        photo_bytes = None
+        if image_path:
+            try:
+                if os.path.exists(image_path):
+                    with open(image_path, "rb") as f:
+                        photo_bytes = f.read()
+                    log(f"Loaded attached image for Telegram: {image_path}")
+                else:
+                    log(f"Attached image file not found: {image_path}. Falling back to live screen capture.")
+            except Exception as e:
+                log(f"Failed to load attached image {image_path}: {e}")
+
+        if not photo_bytes and capture_screen:
+            try:
+                import pyautogui
+                if region and isinstance(region, list) and len(region) == 4:
+                    region_tuple = tuple(int(x) for x in region)
+                else:
+                    region_tuple = None
+                screenshot = pyautogui.screenshot(region=region_tuple)
+                import io
+                img_byte_arr = io.BytesIO()
+                screenshot.save(img_byte_arr, format='PNG')
+                img_byte_arr.seek(0)
+                photo_bytes = img_byte_arr.read()
+                log("Captured screenshot for Telegram notification.")
+            except Exception as e:
+                log(f"Failed to capture screenshot: {e}. Sending text message only.")
+                
+        send_telegram_message(bot_token, chat_id, message, photo_bytes)
 
 
 
@@ -1259,17 +1725,44 @@ def wait_until_schedule(workflow: dict[str, Any], dry_run: bool) -> None:
 
 
 def execute_workflow(workflow: dict[str, Any]) -> None:
-    settings = workflow.get("settings", {})
-    dry_run = settings.get("dryRun", True)
-    step_delay = float(settings.get("stepDelaySec", 0))
-    start_steps = cast(list[dict[str, Any]], workflow["startSteps"])
-    stop_steps = cast(list[dict[str, Any]], workflow["stopSteps"])
+    global abort_requested, cumulative_revenue
+    abort_requested = False
+    cumulative_revenue = 0.0
+    
+    if sys.platform == "win32":
+        t = threading.Thread(target=mouse_listener, daemon=True)
+        t.start()
+        log("Started background mouse listener thread.")
 
-    log(f"Starting workflow '{workflow.get('name', 'untitled')}'")
-    log(f"Mode: {'dry-run' if dry_run else 'live'}")
-    wait_until_schedule(workflow, dry_run)
+    settings = workflow.get("settings", {})
+    deviceName = settings.get("deviceName", "Thiết bị")
+    bot_token = settings.get("telegramBotToken")
+    chat_id = settings.get("telegramChatId")
+    report_startup = settings.get("reportStartup", False)
+    report_error = settings.get("reportError", False)
+
+    if bot_token and chat_id and report_startup:
+        try:
+            startup_msg = f"{deviceName} đã kết nối"
+            send_telegram_message(bot_token, chat_id, startup_msg)
+            log(f"Sent startup Telegram notification for {deviceName}")
+        except Exception as e:
+            log(f"Failed to send startup Telegram notification: {e}")
 
     try:
+        # Restore window layout if configured
+        window_layout = settings.get("windowLayout")
+        if window_layout and isinstance(window_layout, list):
+            restore_window_layout(window_layout)
+        dry_run = settings.get("dryRun", True)
+        step_delay = float(settings.get("stepDelaySec", 0))
+        start_steps = cast(list[dict[str, Any]], workflow["startSteps"])
+        stop_steps = cast(list[dict[str, Any]], workflow["stopSteps"])
+
+        log(f"Starting workflow '{workflow.get('name', 'untitled')}'")
+        log(f"Mode: {'dry-run' if dry_run else 'live'}")
+        wait_until_schedule(workflow, dry_run)
+
         repeat = settings.get("repeat", {})
         if repeat.get("enabled"):
             times = repeat.get("times", 0)  # 0 means infinite loop
@@ -1277,6 +1770,7 @@ def execute_workflow(workflow: dict[str, Any]) -> None:
             
             run_count = 0
             while True:
+                abort_requested = False
                 run_count += 1
                 log(f"--- Running workflow iteration {run_count} ---")
                 execute_step_list(start_steps, dry_run, "start", step_delay)
@@ -1293,6 +1787,15 @@ def execute_workflow(workflow: dict[str, Any]) -> None:
             execute_step_list(stop_steps, dry_run, "stop", step_delay)
 
         log("Workflow finished successfully")
+    except Exception as error:
+        if bot_token and chat_id and report_error:
+            try:
+                error_msg = f"{deviceName} ngắt kết nối vì lỗi trong quá trình flow: {error}"
+                send_telegram_message(bot_token, chat_id, error_msg)
+                log(f"Sent error Telegram notification for {deviceName}")
+            except Exception as te:
+                log(f"Failed to send error Telegram notification: {te}")
+        raise
     finally:
         # Stop all running intervals
         with intervals_lock:
@@ -1305,8 +1808,17 @@ def execute_workflow(workflow: dict[str, Any]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--workflow-json", required=True, help="Raw workflow JSON string")
+    parser.add_argument("--workflow-json", help="Raw workflow JSON string")
+    parser.add_argument("--capture-layout", action="store_true", help="Capture current window positions and sizes and exit")
     args = parser.parse_args()
+
+    if args.capture_layout:
+        layout = capture_window_layout()
+        print(f"[LAYOUT_JSON]{json.dumps(layout)}")
+        return 0
+
+    if not args.workflow_json:
+        parser.error("--workflow-json is required unless --capture-layout is specified")
 
     workflow = load_workflow(args.workflow_json)
     execute_workflow(workflow)

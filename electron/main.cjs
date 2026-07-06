@@ -274,13 +274,14 @@ function killProcessTree(child) {
   }
 }
 
-ipcMain.handle("runner:start", async (_event, payload) => {
+ipcMain.handle("runner:start", async (event, payload) => {
   if (activeChild) {
     killProcessTree(activeChild);
     activeChild = null;
   }
 
   const runner = resolveRunnerCommand();
+  const webContents = event.sender;
 
   return await new Promise((resolve, reject) => {
     const child = spawn(runner.command, [...runner.args, "--workflow-json", payload.workflow], {
@@ -290,13 +291,38 @@ ipcMain.handle("runner:start", async (_event, payload) => {
 
     let stdout = "";
     let stderr = "";
+    let lineAccumulator = "";
+    let stderrAccumulator = "";
 
     child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
+      const text = chunk.toString();
+      stdout += text;
+
+      lineAccumulator += text;
+      const lines = lineAccumulator.split(/\r?\n/);
+      lineAccumulator = lines.pop();
+
+      for (const line of lines) {
+        if (line.includes("[STATUS] PAUSED")) {
+          webContents.send("workflow-status", "paused");
+        } else if (line.includes("[STATUS] RESUMED")) {
+          webContents.send("workflow-status", "running");
+        }
+        webContents.send("workflow-log", line);
+      }
     });
 
     child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
+      const text = chunk.toString();
+      stderr += text;
+
+      stderrAccumulator += text;
+      const lines = stderrAccumulator.split(/\r?\n/);
+      stderrAccumulator = lines.pop();
+
+      for (const line of lines) {
+        webContents.send("workflow-log", `[stderr] ${line}`);
+      }
     });
 
     child.on("error", (error) => {
@@ -309,6 +335,20 @@ ipcMain.handle("runner:start", async (_event, payload) => {
       if (activeChild === child) {
         activeChild = null;
       }
+
+      // Flush remaining data in accumulators
+      if (lineAccumulator) {
+        if (lineAccumulator.includes("[STATUS] PAUSED")) {
+          webContents.send("workflow-status", "paused");
+        } else if (lineAccumulator.includes("[STATUS] RESUMED")) {
+          webContents.send("workflow-status", "running");
+        }
+        webContents.send("workflow-log", lineAccumulator);
+      }
+      if (stderrAccumulator) {
+        webContents.send("workflow-log", `[stderr] ${stderrAccumulator}`);
+      }
+
       resolve({ code, stdout, stderr });
     });
   });
@@ -339,6 +379,47 @@ ipcMain.handle("window:set-always-on-top", async (event, flag) => {
     return true;
   }
   return false;
+});
+
+ipcMain.handle("windows:capture-layout", async () => {
+  const runner = resolveRunnerCommand();
+  return await new Promise((resolve) => {
+    const child = spawn(runner.command, [...runner.args, "--capture-layout"], {
+      cwd: app.isPackaged ? process.resourcesPath : getProjectRoot()
+    });
+
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("close", (code) => {
+      if (code !== 0) {
+        console.error(`capture-layout process exited with code ${code}. Stderr: ${stderr}`);
+      }
+      try {
+        const match = stdout.match(/\[LAYOUT_JSON\](.*)/);
+        if (match) {
+          resolve(JSON.parse(match[1]));
+        } else {
+          resolve([]);
+        }
+      } catch (err) {
+        console.error("Failed to parse captured layout:", err);
+        resolve([]);
+      }
+    });
+
+    child.on("error", (err) => {
+      console.error("Failed to run capture-layout:", err);
+      resolve([]);
+    });
+  });
 });
 
 app.whenReady().then(() => {

@@ -2,8 +2,16 @@
   color-scheme: dark;
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
   background:
-    radial-gradient(circle at top left, rgba(255, 127, 80, 0.12), transparent 28%),
-    radial-gradient(circle at top right, rgba(255, 215, 0, 0.12), transparent 24%),
+    radial-gradient(
+      circle at top left,
+      rgba(255, 127, 80, 0.12),
+      transparent 28%
+    ),
+    radial-gradient(
+      circle at top right,
+      rgba(255, 215, 0, 0.12),
+      transparent 24%
+    ),
     linear-gradient(180deg, #161714 0%, #0f100e 100%);
   color: #f4f2ea;
 }
@@ -32,7 +40,10 @@ button {
   padding: 5px 12px;
   color: #f8f4e8;
   background: rgba(255, 255, 255, 0.04);
-  transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease;
   font-size: 11px;
 }
 
@@ -41,7 +52,6 @@ button:hover {
   border-color: rgba(255, 184, 108, 0.5);
   background: rgba(255, 255, 255, 0.08);
 }
-
 
 button.primary {
   background: #245e4a;
@@ -59,7 +69,13 @@ button.accent {
   height: 100vh;
   width: 100vw;
   overflow: hidden;
-  background: radial-gradient(circle at 10% 20%, rgba(20, 184, 166, 0.05), transparent 40%), #0c0e0c;
+  background:
+    radial-gradient(
+      circle at 10% 20%,
+      rgba(20, 184, 166, 0.05),
+      transparent 40%
+    ),
+    #0c0e0c;
   color: #f4f2ea;
   position: relative;
 }
@@ -215,19 +231,20 @@ button.accent {
   flex: 1;
   display: flex;
   height: calc(100vh - 28px);
-  /* subtract status bar */
-  overflow: hidden;
+  overflow: auto;
+  flex-wrap: wrap;
 }
 
 /* Editor Panel (Middle) */
 .editor-panel {
   flex: 1.4;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
   border-right: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(14, 16, 14, 0.4);
   height: 100%;
-  padding: 10px
+  padding: 10px;
 }
 
 .panelHeader h2 {
@@ -266,12 +283,10 @@ button.accent {
 
 /* Console Panel (Right) */
 .console-panel {
-  width: 320px;
-  min-width: 320px;
   display: flex;
   flex-direction: column;
   background: rgba(10, 11, 10, 0.95);
-  height: 100%;
+  flex: 1;
 }
 
 .console-tabs {
@@ -314,23 +329,6 @@ button.accent {
 .summary-tab-content {
   display: flex;
   flex-direction: column;
-}
-
-.logBox {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  height: 100%;
-}
-
-.logBox pre {
-  margin: 0;
-  padding: 10px 12px;
-  border-radius: 10px;
-  font-size: 0.8rem;
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.03);
-  color: #d8d0bf;
 }
 
 /* Status Bar */
@@ -512,18 +510,18 @@ button.accent {
 }
 
 .logBox {
-  display: grid;
-  gap: 10px;
   max-height: 280px;
   overflow: auto;
 }
 
 .logBox pre {
   margin: 0;
-  padding: 12px 14px;
-  border-radius: 14px;
+  padding: 6px 10px;
+  border-radius: 6px;
   background: rgba(0, 0, 0, 0.3);
   color: #d8d0bf;
+  font-size: 10px;
+  line-height: 1.35;
 }
 
 .errorText {
@@ -609,7 +607,6 @@ button.accent {
   transition: border-color 120ms ease;
 }
 
-
 .form-group input:focus,
 .form-group select:focus,
 .form-group textarea:focus {
@@ -667,7 +664,9 @@ button.accent {
   flex-direction: column;
   gap: 12px;
   position: relative;
-  transition: border-color 150ms ease, background-color 150ms ease;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease;
 }
 
 .step-card:hover {
@@ -723,7 +722,6 @@ button.accent {
 .step-card.step-press_key {
   border-left: 5px solid #f97316;
 }
-
 
 .step-card-header {
   display: flex;
@@ -812,7 +810,6 @@ button.accent {
   background: rgba(249, 115, 22, 0.15);
   color: #fb923c;
 }
-
 
 .step-card-actions {
   display: flex;
@@ -1211,6 +1208,11 @@ button.accent {
   background: #ef4444;
 }
 
+.compact-status-dot.paused {
+  background: #f59e0b;
+  animation: pulse-glow-paused 1.5s infinite;
+}
+
 .compact-status-dot.success {
   background: #10b981;
 }
@@ -1254,11 +1256,57 @@ button.accent {
   font-weight: bold;
   padding: 2px 8px;
   border-radius: 4px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.25);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.25);
   z-index: 10;
 }
 
 .stepList li.coordinate-warning {
   border-left: 4px solid #f59e0b !important;
   background: rgba(245, 158, 11, 0.05) !important;
+}
+
+@keyframes pulse-glow-paused {
+  0% {
+    transform: scale(0.8);
+    opacity: 0.5;
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.7);
+  }
+
+  70% {
+    transform: scale(1.1);
+    opacity: 1;
+    box-shadow: 0 0 0 6px rgba(245, 158, 11, 0);
+  }
+
+  100% {
+    transform: scale(0.8);
+    opacity: 0.5;
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+  }
+}
+
+/* Right Sidebar Step Highlights */
+.stepList li.step-running {
+  border-left: 4px solid #14b8a6 !important;
+  background: rgba(20, 184, 166, 0.08) !important;
+  box-shadow: 0 0 8px rgba(20, 184, 166, 0.2);
+  animation: pulse-running-step 1.5s infinite;
+}
+
+.stepList li.step-failed {
+  border-left: 4px solid #ef4444 !important;
+  background: rgba(239, 68, 68, 0.08) !important;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.2);
+}
+
+@keyframes pulse-running-step {
+  0% {
+    background: rgba(20, 184, 166, 0.05);
+  }
+  50% {
+    background: rgba(20, 184, 166, 0.15);
+  }
+  100% {
+    background: rgba(20, 184, 166, 0.05);
+  }
 }

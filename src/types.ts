@@ -124,6 +124,23 @@ export type PressKeyStep = {
   key: string;
 };
 
+export type AbortIterationStep = {
+  type: "abort_iteration";
+  name: string;
+};
+
+export type SendTelegramStep = {
+  type: "send_telegram";
+  name: string;
+  botToken: string;
+  chatId: string;
+  message?: string;
+  captureScreen?: boolean;
+  ocrRevenue?: boolean;
+  image?: string;
+  region?: [number, number, number, number];
+};
+
 export type Step =
   | ClickStep
   | DoubleClickStep
@@ -136,7 +153,9 @@ export type Step =
   | ConditionalWorkflowStep
   | CheckIntervalStep
   | ClearIntervalStep
-  | PressKeyStep;
+  | PressKeyStep
+  | AbortIterationStep
+  | SendTelegramStep;
 
 export type Workflow = {
   name: string;
@@ -157,6 +176,19 @@ export type Workflow = {
       times: number;
       intervalMs: number;
     };
+    deviceName?: string;
+    telegramBotToken?: string;
+    telegramChatId?: string;
+    reportStartup?: boolean;
+    reportError?: boolean;
+    windowLayout?: Array<{
+      title: string;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      enabled: boolean;
+    }>;
   };
   startSteps: Step[];
   stopSteps: Step[];
@@ -180,6 +212,16 @@ declare global {
       readImage: (filePath: string) => Promise<string>;
       captureMousePosition: () => Promise<{ x: number; y: number } | null>;
       captureRegion: () => Promise<{ x: number; y: number; width: number; height: number; base64: string } | null>;
+      onStatusChange?: (callback: (status: "running" | "paused") => void) => () => void;
+      onLog?: (callback: (log: string) => void) => () => void;
+      captureWindowLayout?: () => Promise<Array<{
+        title: string;
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        enabled: boolean;
+      }>>;
     };
   }
 }

@@ -22,6 +22,16 @@ type DesktopApi = {
   captureRegion: () => Promise<{ x: number; y: number; width: number; height: number; base64: string } | null>;
   setWindowSize?: (width: number, height: number) => Promise<boolean>;
   setWindowAlwaysOnTop?: (flag: boolean) => Promise<boolean>;
+  onStatusChange?: (callback: (status: "running" | "paused") => void) => () => void;
+  onLog?: (callback: (log: string) => void) => () => void;
+  captureWindowLayout?: () => Promise<Array<{
+    title: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    enabled: boolean;
+  }>>;
 };
 
 function readLocalWorkflows(): Record<string, string> {
@@ -117,6 +127,18 @@ const browserApi: DesktopApi = {
   async setWindowAlwaysOnTop(flag) {
     console.log(`[browser mode] Set always on top: ${flag}`);
     return true;
+  },
+  onStatusChange(callback) {
+    return () => {};
+  },
+  onLog(callback) {
+    return () => {};
+  },
+  async captureWindowLayout() {
+    return [
+      { title: "Google Chrome", x: 100, y: 100, width: 1200, height: 800, enabled: true },
+      { title: "TikTok Studio", x: 200, y: 150, width: 1000, height: 700, enabled: true }
+    ];
   }
 };
 

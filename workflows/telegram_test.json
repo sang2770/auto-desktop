@@ -1,0 +1,31 @@
+{
+  "name": "Báo cáo kết quả Telegram",
+  "description": "Workflow mẫu chụp ảnh màn hình và gửi báo cáo về Telegram",
+  "schedule": {
+    "enabled": false,
+    "startAt": "",
+    "stopAt": "",
+    "timezone": "Asia/Ho_Chi_Minh"
+  },
+  "settings": {
+    "dryRun": false,
+    "retryCount": 0,
+    "captureOnError": true,
+    "repeat": {
+      "enabled": false,
+      "times": 0,
+      "intervalMs": 1000
+    }
+  },
+  "startSteps": [
+    {
+      "type": "send_telegram",
+      "name": "Chụp ảnh kết quả và gửi Telegram",
+      "botToken": "NHẬP_TOKEN_BOT_CỦA_BẠN",
+      "chatId": "NHẬP_CHAT_ID_CỦA_BẠN",
+      "message": "Thông báo: Quy trình TikTok Live đã hoàn tất hoặc gặp sự cố. Dưới đây là ảnh chụp kết quả màn hình hiện tại.",
+      "captureScreen": true
+    }
+  ],
+  "stopSteps": []
+}

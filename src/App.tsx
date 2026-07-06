@@ -22,7 +22,20 @@ const workflowSchema = z.object({
       enabled: z.boolean(),
       times: z.number().int().min(0),
       intervalMs: z.number().int().min(0)
-    }).optional()
+    }).optional(),
+    deviceName: z.string().optional(),
+    telegramBotToken: z.string().optional(),
+    telegramChatId: z.string().optional(),
+    reportStartup: z.boolean().optional(),
+    reportError: z.boolean().optional(),
+    windowLayout: z.array(z.object({
+      title: z.string(),
+      x: z.number(),
+      y: z.number(),
+      width: z.number(),
+      height: z.number(),
+      enabled: z.boolean()
+    })).optional()
   }),
   startSteps: z.array(z.record(z.any())),
   stopSteps: z.array(z.record(z.any()))
@@ -105,6 +118,14 @@ function StepCard({
   const [hasRegion, setHasRegion] = useState(
     "region" in step && Array.isArray(step.region) && step.region.length === 4
   );
+
+  useEffect(() => {
+    setHasRegion("region" in step && Array.isArray(step.region) && step.region.length === 4);
+  }, [step]);
+
+  useEffect(() => {
+    setHasRegion("region" in step && Array.isArray(step.region) && step.region.length === 4);
+  }, [step]);
 
   const region = "region" in step && step.region ? step.region : [0, 0, 0, 0];
 
@@ -253,6 +274,8 @@ function StepCard({
             {step.type === "check_interval" && "Lặp Chu Kỳ"}
             {step.type === "clear_interval" && "Dừng Chu Kỳ"}
             {step.type === "press_key" && "Nhấn Phím"}
+            {step.type === "abort_iteration" && "Hủy Phiên Live"}
+            {step.type === "send_telegram" && "Gửi Telegram"}
           </span>
           <input
             type="text"
@@ -324,6 +347,10 @@ function StepCard({
                 onUpdate({ type: "clear_interval", name: step.name, intervalId: "loop1" });
               } else if (newType === "press_key") {
                 onUpdate({ type: "press_key", name: step.name, key: "f5" });
+              } else if (newType === "abort_iteration") {
+                onUpdate({ type: "abort_iteration", name: step.name });
+              } else if (newType === "send_telegram") {
+                onUpdate({ type: "send_telegram", name: step.name, botToken: "", chatId: "", message: "Báo cáo kết quả", captureScreen: true, ocrRevenue: false, region: undefined });
               }
             }}
           >
@@ -339,6 +366,8 @@ function StepCard({
             <option value="check_interval">Kiểm tra lặp chu kỳ (Check Interval)</option>
             <option value="clear_interval">Xoá lặp chu kỳ (Clear Interval)</option>
             <option value="press_key">Nhấn phím bàn phím (Press Key)</option>
+            <option value="abort_iteration">Hủy phiên Live hiện tại (Abort Iteration)</option>
+            <option value="send_telegram">Gửi báo cáo Telegram (Send Telegram)</option>
           </select>
         </div>
 
@@ -1238,8 +1267,129 @@ function StepCard({
           </div>
         )}
 
+        {step.type === "send_telegram" && (
+          <>
+            <div className="form-grid">
+              <div className="form-group">
+                <label>Token Bot Telegram (botToken)</label>
+                <input
+                  type="text"
+                  value={step.botToken}
+                  onChange={(e) => onUpdate({ ...step, botToken: e.target.value } as Step)}
+                  placeholder="Nhập Token Telegram Bot"
+                />
+              </div>
+              <div className="form-group">
+                <label>Chat ID nhận tin (chatId)</label>
+                <input
+                  type="text"
+                  value={step.chatId}
+                  onChange={(e) => onUpdate({ ...step, chatId: e.target.value } as Step)}
+                  placeholder="Nhập ID cuộc trò chuyện hoặc group"
+                />
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Nội dung tin nhắn (message)</label>
+              <textarea
+                value={step.message || ""}
+                onChange={(e) => onUpdate({ ...step, message: e.target.value } as Step)}
+                placeholder={step.ocrRevenue ? "Doanh thu phiên live: {current}đ. Tổng tích lũy từ đầu: {total}đ" : "Nhập nội dung thông báo kèm theo..."}
+                rows={2}
+                style={{
+                  width: "100%",
+                  background: "rgba(0,0,0,0.2)",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: "4px",
+                  color: "#fff",
+                  padding: "8px",
+                  fontSize: "14px",
+                  fontFamily: "inherit"
+                }}
+              />
+              {step.ocrRevenue && (
+                <div style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.4)", marginTop: "4px", fontStyle: "italic" }}>
+                  * Sử dụng {"{current}"} cho doanh thu phiên hiện tại và {"{total}"} cho tổng tích luỹ trong nội dung tin nhắn.
+                </div>
+              )}
+            </div>
+
+            <div className="form-group-checkbox">
+              <input
+                type="checkbox"
+                id={`telegram-ocr-${index}`}
+                checked={step.ocrRevenue === true}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  onUpdate({
+                    ...step,
+                    ocrRevenue: checked,
+                    captureScreen: checked ? false : step.captureScreen,
+                    image: checked ? undefined : step.image
+                  } as Step);
+                }}
+              />
+              <label htmlFor={`telegram-ocr-${index}`}>Nhận diện doanh thu bằng OCR (OCR Revenue)</label>
+            </div>
+
+            {!step.ocrRevenue && (
+              <>
+                <div className="form-group-checkbox" style={{ marginTop: "8px" }}>
+                  <input
+                    type="checkbox"
+                    id={`telegram-capture-${index}`}
+                    checked={step.captureScreen !== false}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      onUpdate({
+                        ...step,
+                        captureScreen: checked,
+                        image: checked ? undefined : step.image
+                      } as Step);
+                    }}
+                  />
+                  <label htmlFor={`telegram-capture-${index}`}>Chụp ảnh màn hình đính kèm (chụp tại thời điểm chạy)</label>
+                </div>
+
+                {step.captureScreen === false && (
+                  <div className="image-upload-wrapper form-section" style={{ border: "none", margin: "10px 0 0 0", padding: 0 }}>
+                    <div className="form-group">
+                      <label>Ảnh đính kèm tĩnh (Tải lên hoặc chụp màn hình trước)</label>
+                      <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
+                        <div className="image-upload-box" style={{ flex: 1 }}>
+                          <span className="image-upload-text">📁 Chọn file ảnh</span>
+                          <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, "image")} />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const res = await desktopApi.captureRegion();
+                            if (res) {
+                              if (isElectronDesktopApi) {
+                                const path = await desktopApi.saveImage({ name: "crop-telegram.png", base64: res.base64 });
+                                onUpdate({ ...step, image: path } as Step);
+                              } else {
+                                onUpdate({ ...step, image: res.base64 } as Step);
+                              }
+                            }
+                          }}
+                          style={{ background: "rgba(255,255,255,0.06)", border: "1px dashed rgba(255,255,255,0.2)" }}
+                        >
+                          📷 Chụp trực tiếp
+                        </button>
+                      </div>
+                    </div>
+                    <ImagePreview filePath={step.image} />
+                  </div>
+                )}
+              </>
+            )}
+          </>
+        )}
+
         {/* Region config common helper for visual steps */}
-        {("region" in step) && (
+        {("region" in step || ["send_telegram", "wait_for_image", "check_text", "click", "double_click", "conditional", "conditional_workflow", "check_interval"].includes(step.type)) && (
           <div className="form-section" style={{ border: "none", margin: 0, padding: 0 }}>
             <div className="form-group-checkbox">
               <input
@@ -1364,6 +1514,9 @@ function App() {
   const [isCompact, setIsCompact] = useState<boolean>(false);
   const [alwaysOnTop, setAlwaysOnTop] = useState<boolean>(false);
   const [isRunning, setIsRunning] = useState<boolean>(false);
+  const [isPaused, setIsPaused] = useState<boolean>(false);
+  const [currentStepIdx, setCurrentStepIdx] = useState<number | null>(null);
+  const [failedStepIdx, setFailedStepIdx] = useState<number | null>(null);
 
   const [workflowText, setWorkflowText] = useState(sampleJson);
   const [loadedPath, setLoadedPath] = useState<string>("");
@@ -1420,6 +1573,51 @@ function App() {
         ...current
       ]);
     }
+  }, []);
+
+  useEffect(() => {
+    if (!isElectronDesktopApi) return;
+
+    let cleanupStatus = () => {};
+    let cleanupLog = () => {};
+
+    if (desktopApi.onStatusChange) {
+      cleanupStatus = desktopApi.onStatusChange((status) => {
+        if (status === "paused") {
+          setIsPaused(true);
+          setStatus("⏸️ Tạm dừng (Chờ người dùng dừng thao tác)...");
+        } else if (status === "running") {
+          setIsPaused(false);
+          setStatus("Đang chạy tự động...");
+        }
+      });
+    }
+
+    if (desktopApi.onLog) {
+      cleanupLog = desktopApi.onLog((logLine) => {
+        setLogs((current) => [logLine, ...current]);
+        
+        const match = logLine.match(/Step (\d+)\/\d+:/);
+        if (match) {
+          const stepIdx = parseInt(match[1], 10) - 1;
+          setCurrentStepIdx(stepIdx);
+        }
+        
+        if (logLine.includes("ERROR:") || logLine.includes("Traceback") || logLine.includes("TimeoutError") || logLine.includes("RuntimeError")) {
+          setCurrentStepIdx((curr) => {
+            if (curr !== null) {
+              setFailedStepIdx(curr);
+            }
+            return curr;
+          });
+        }
+      });
+    }
+
+    return () => {
+      cleanupStatus();
+      cleanupLog();
+    };
   }, []);
 
   const toggleCompact = async () => {
@@ -1534,6 +1732,8 @@ function App() {
       newStep = { type: "clear_interval", name: "Dừng lặp chu kỳ", intervalId: "" };
     } else if (type === "press_key") {
       newStep = { type: "press_key", name: "Nhấn phím bàn phím", key: "f5" };
+    } else if (type === "send_telegram") {
+      newStep = { type: "send_telegram", name: "Gửi báo cáo Telegram", botToken: "", chatId: "", message: "Báo cáo kết quả", captureScreen: true, ocrRevenue: false, region: undefined };
     } else {
       newStep = {
         type: "conditional",
@@ -1700,17 +1900,23 @@ function App() {
     }
 
     setIsRunning(true);
+    setIsPaused(false);
+    setCurrentStepIdx(null);
+    setFailedStepIdx(null);
     setStatus("Đang chạy tự động...");
     setLogs((current) => [`Trình chạy bắt đầu lúc ${new Date().toLocaleTimeString()}.`, ...current]);
     try {
       const result = await desktopApi.runWorkflow({ workflow: workflowText });
-      const chunks = [result.stdout.trim(), result.stderr.trim()].filter(Boolean);
-      setLogs((current) => [...chunks.reverse(), ...current]);
+      if (!isElectronDesktopApi) {
+        const chunks = [result.stdout.trim(), result.stderr.trim()].filter(Boolean);
+        setLogs((current) => [...chunks.reverse(), ...current]);
+      }
       setStatus(result.code === 0 ? "Chạy hoàn tất thành công" : `Lỗi runner, mã thoát: ${result.code}`);
     } catch (err) {
       setStatus(`Lỗi: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsRunning(false);
+      setIsPaused(false);
     }
   }
 
@@ -1734,7 +1940,7 @@ function App() {
   if (isCompact) {
     const latestLog = logs[0] || "Chưa có nhật ký hoạt động nào.";
     const statusDotClass = isRunning 
-      ? "running" 
+      ? (isPaused ? "paused" : "running") 
       : status.includes("Lỗi") 
       ? "error" 
       : status.includes("thành công") 
@@ -1794,8 +2000,16 @@ function App() {
 
           <div>
             {isRunning ? (
-              <button className="compact-action-btn stop-btn" onClick={handleStop} style={{ backgroundColor: "#dc3545", color: "#fff" }}>
-                🛑 Dừng quy trình
+              <button 
+                className={`compact-action-btn stop-btn ${isPaused ? "paused" : ""}`} 
+                onClick={handleStop} 
+                style={{ 
+                  backgroundColor: isPaused ? "#f59e0b" : "#dc3545", 
+                  color: "#fff",
+                  transition: "all 0.3s ease"
+                }}
+              >
+                {isPaused ? "⏸️ Tạm dừng (Dừng)" : "🛑 Dừng quy trình"}
               </button>
             ) : (
               <button className="compact-action-btn run-btn" onClick={handleRun} disabled={!workflow}>
@@ -1902,8 +2116,16 @@ function App() {
                 Lưu
               </button>
               {isRunning ? (
-                <button className="stop-btn" onClick={handleStop} style={{ backgroundColor: "#dc3545", color: "#fff" }}>
-                  Dừng
+                <button 
+                  className={`stop-btn ${isPaused ? "paused" : ""}`} 
+                  onClick={handleStop} 
+                  style={{ 
+                    backgroundColor: isPaused ? "#f59e0b" : "#dc3545", 
+                    color: "#fff",
+                    transition: "all 0.3s ease"
+                  }}
+                >
+                  {isPaused ? "⏸️ Tạm dừng (Dừng)" : "Dừng"}
                 </button>
               ) : (
                 <button className="accent" onClick={handleRun}>
@@ -2064,6 +2286,169 @@ function App() {
                   )}
                 </div>
 
+                {/* Global Telegram Alerts settings */}
+                <div className="form-section">
+                  <h3 className="form-section-title">📢 Báo cáo trạng thái qua Telegram</h3>
+                  
+                  <div className="form-grid">
+                    <div className="form-group">
+                      <label>Tên máy này (deviceName)</label>
+                      <input
+                        type="text"
+                        value={workflow.settings.deviceName || ""}
+                        onChange={(e) => updateSettings("deviceName", e.target.value)}
+                        placeholder="Ví dụ: máy 1"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Token Bot Telegram</label>
+                      <input
+                        type="text"
+                        value={workflow.settings.telegramBotToken || ""}
+                        onChange={(e) => updateSettings("telegramBotToken", e.target.value)}
+                        placeholder="Token của Bot nhận tin nhắn"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Chat ID nhận báo cáo</label>
+                      <input
+                        type="text"
+                        value={workflow.settings.telegramChatId || ""}
+                        onChange={(e) => updateSettings("telegramChatId", e.target.value)}
+                        placeholder="ID cuộc trò chuyện hoặc group"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="form-grid" style={{ marginTop: "10px", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
+                    <div className="form-group-checkbox">
+                      <input
+                        type="checkbox"
+                        id="setting-report-startup"
+                        checked={workflow.settings.reportStartup ?? false}
+                        onChange={(e) => updateSettings("reportStartup", e.target.checked)}
+                      />
+                      <label htmlFor="setting-report-startup" style={{ marginLeft: "6px" }}>Báo Telegram khi BẮT ĐẦU chạy tool</label>
+                    </div>
+                    <div className="form-group-checkbox">
+                      <input
+                        type="checkbox"
+                        id="setting-report-error"
+                        checked={workflow.settings.reportError ?? false}
+                        onChange={(e) => updateSettings("reportError", e.target.checked)}
+                      />
+                      <label htmlFor="setting-report-error" style={{ marginLeft: "6px" }}>Báo Telegram khi xảy ra LỖI trong quá trình chạy</label>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Window Layout settings */}
+                <div className="form-section">
+                  <h3 className="form-section-title">🖥️ Cố định vị trí cửa sổ (Window Layout)</h3>
+                  <p style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.5)", margin: "0 0 10px 0" }}>
+                    Chụp lại vị trí và kích thước của các cửa sổ ứng dụng (trừ chính tool này) để khi chạy tool sẽ tự động khôi phục lại vị trí cũ, giúp click toạ độ chuẩn xác tuyệt đối.
+                  </p>
+                  
+                  <div style={{ marginBottom: "12px" }}>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (desktopApi.captureWindowLayout) {
+                          setStatus("Đang quét các cửa sổ...");
+                          try {
+                            const layout = await desktopApi.captureWindowLayout();
+                            updateSettings("windowLayout", layout);
+                            setStatus(`Đã lưu bố cục của ${layout.length} cửa sổ`);
+                            setLogs((current) => [`Đã chụp bố cục cửa sổ hiện tại (${layout.length} cửa sổ).`, ...current]);
+                          } catch (err) {
+                            console.error("Lỗi khi chụp bố cục cửa sổ:", err);
+                            setStatus("Lỗi khi chụp bố cục cửa sổ.");
+                          }
+                        }
+                      }}
+                      style={{ background: "rgba(20, 184, 166, 0.15)", borderColor: "#14b8a6", color: "#14b8a6" }}
+                    >
+                      📷 Chụp & Lưu Vị Trí Cửa Sổ Hiện Tại
+                    </button>
+                  </div>
+
+                  {workflow.settings.windowLayout && workflow.settings.windowLayout.length > 0 ? (
+                    <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "8px", padding: "10px", border: "1px solid rgba(255,255,255,0.05)", overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
+                        <thead>
+                          <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.1)", textAlign: "left" }}>
+                            <th style={{ padding: "6px" }}>Bật</th>
+                            <th style={{ padding: "6px" }}>Tên Cửa Sổ (Title)</th>
+                            <th style={{ padding: "6px" }}>Toạ độ (X, Y)</th>
+                            <th style={{ padding: "6px" }}>Kích thước (W x H)</th>
+                            <th style={{ padding: "6px" }}>Hành động</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {workflow.settings.windowLayout.map((win, idx) => (
+                            <tr key={idx} style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+                              <td style={{ padding: "6px" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={win.enabled}
+                                  onChange={(e) => {
+                                    const nextLayout = [...(workflow.settings.windowLayout || [])];
+                                    nextLayout[idx] = { ...win, enabled: e.target.checked };
+                                    updateSettings("windowLayout", nextLayout);
+                                  }}
+                                  style={{ cursor: "pointer" }}
+                                />
+                              </td>
+                              <td style={{ padding: "6px" }}>
+                                <input
+                                  type="text"
+                                  value={win.title}
+                                  onChange={(e) => {
+                                    const nextLayout = [...(workflow.settings.windowLayout || [])];
+                                    nextLayout[idx] = { ...win, title: e.target.value };
+                                    updateSettings("windowLayout", nextLayout);
+                                  }}
+                                  style={{
+                                    background: "transparent",
+                                    border: "none",
+                                    borderBottom: "1px dashed rgba(255,255,255,0.2)",
+                                    color: win.enabled ? "#fff" : "rgba(255,255,255,0.4)",
+                                    fontSize: "0.82rem",
+                                    width: "100%",
+                                    padding: "2px"
+                                  }}
+                                />
+                              </td>
+                              <td style={{ padding: "6px", color: win.enabled ? "#14b8a6" : "rgba(255,255,255,0.4)" }}>
+                                {win.x}, {win.y}
+                              </td>
+                              <td style={{ padding: "6px", color: win.enabled ? "#14b8a6" : "rgba(255,255,255,0.4)" }}>
+                                {win.width} x {win.height}
+                              </td>
+                              <td style={{ padding: "6px" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const nextLayout = (workflow.settings.windowLayout || []).filter((_, i) => i !== idx);
+                                    updateSettings("windowLayout", nextLayout);
+                                  }}
+                                  style={{ background: "transparent", border: "none", color: "#ef4444", padding: "0 4px", fontSize: "0.8rem" }}
+                                >
+                                  Xoá
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div style={{ fontStyle: "italic", color: "rgba(255,255,255,0.3)", fontSize: "0.8rem", textAlign: "center", padding: "10px", border: "1px dashed rgba(255,255,255,0.1)", borderRadius: "8px" }}>
+                      Chưa lưu bố cục cửa sổ nào.
+                    </div>
+                  )}
+                </div>
+
                 {/* Steps Section */}
                 <div>
                   <h3 className="form-section-title">🛠️ Danh sách các bước thực hiện</h3>
@@ -2130,6 +2515,9 @@ function App() {
                       <button type="button" onClick={() => handleAddStep("press_key")} style={{ background: "rgba(249, 115, 22, 0.15)", borderColor: "rgba(249, 115, 22, 0.3)" }}>
                         + Nhấn Phím
                       </button>
+                      <button type="button" onClick={() => handleAddStep("send_telegram")} style={{ background: "rgba(16, 185, 129, 0.15)", borderColor: "rgba(16, 185, 129, 0.3)" }}>
+                        + Gửi Telegram
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -2183,9 +2571,26 @@ function App() {
                           (step.type === "click" && (!step.clickType || step.clickType === "coordinate")) ||
                           (step.type === "double_click" && (!step.clickType || step.clickType === "coordinate")) ||
                           (step.type === "conditional" && (step.actionType === "click" || step.actionType === "double_click"));
+                        
+                        const isCurrent = index === currentStepIdx;
+                        const isFailed = index === failedStepIdx;
+                        
+                        let liClass = "";
+                        if (isCurrent) liClass = "step-running";
+                        else if (isFailed) liClass = "step-failed";
+                        else if (isStepCoord) liClass = "coordinate-warning";
+
                         return (
-                          <li key={`${step.type}-${index}`} className={isStepCoord ? "coordinate-warning" : ""}>
-                            <span className="stepIndex">{String(index + 1).padStart(2, "0")}</span>
+                          <li key={`${step.type}-${index}`} className={liClass}>
+                            <span 
+                              className="stepIndex"
+                              style={{
+                                background: isFailed ? "#ef4444" : isCurrent ? "#14b8a6" : undefined,
+                                color: isFailed || isCurrent ? "#080908" : undefined
+                              }}
+                            >
+                              {String(index + 1).padStart(2, "0")}
+                            </span>
                             <div>
                               <strong>{step.name}</strong>
                               {isStepCoord && (

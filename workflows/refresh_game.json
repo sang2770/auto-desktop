@@ -1,5 +1,5 @@
 {
-  "name": "Refresh Game",
+  "name": "Làm mới Game",
   "description": "Click focus game and press F5",
   "schedule": {
     "enabled": false,

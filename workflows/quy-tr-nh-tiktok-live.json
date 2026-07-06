@@ -16,13 +16,71 @@
       "enabled": true,
       "times": 2,
       "intervalMs": 6000
-    }
+    },
+    "windowLayout": [
+      {
+        "title": "Auto Desktop",
+        "x": 230,
+        "y": 74,
+        "width": 2100,
+        "height": 1380,
+        "enabled": true
+      },
+      {
+        "title": "auto-desktop - Antigravity IDE - App.tsx [Administrator]",
+        "x": 3823,
+        "y": -17,
+        "width": 2913,
+        "height": 1581,
+        "enabled": true
+      },
+      {
+        "title": "[Extension Development Host] project - Visual Studio Code [Administrator]",
+        "x": 217,
+        "y": 46,
+        "width": 2198,
+        "height": 1364,
+        "enabled": true
+      },
+      {
+        "title": "LUPA AI Studio - Vietnam Software Lab - Collaboration Center and 5 more pages - Work - Microsoft​ Edge",
+        "x": -11,
+        "y": -11,
+        "width": 2582,
+        "height": 1550,
+        "enabled": true
+      },
+      {
+        "title": "codejam - Antigravity IDE - 276C.cpp [Administrator]",
+        "x": 3823,
+        "y": -17,
+        "width": 2913,
+        "height": 1581,
+        "enabled": true
+      },
+      {
+        "title": "Chat | [Internal] LUPA SDK Team | Microsoft Teams",
+        "x": -11,
+        "y": -11,
+        "width": 2582,
+        "height": 1550,
+        "enabled": true
+      },
+      {
+        "title": "Windows Input Experience",
+        "x": 0,
+        "y": 0,
+        "width": 2560,
+        "height": 1600,
+        "enabled": true
+      }
+    ]
   },
   "startSteps": [
     {
       "type": "run_workflow",
       "name": "0. Luồng refresh game",
-      "workflowPath": "C:\\Users\\Admin\\Downloads\\auto-desktop-master\\workflows\\refresh_game.json"
+      "workflowPath": "workflows/refresh_game.json"
     },
     {
       "type": "click",
@@ -68,9 +126,7 @@
       "name": "Bắt đầu check vi phạm",
       "intervalId": "check_violation",
       "intervalSec": 5,
-      "actionWorkflowPath": "C:\\Users\\Admin\\Downloads\\auto-desktop-master\\workflows\\check_violation.json",
-      "stopConditionType": "text",
-      "stopText": "Khiếu nại"
+      "actionWorkflowPath": "workflows/check_violation.json"
     },
     {
       "type": "wait",
@@ -78,9 +134,14 @@
       "ms": 30000
     },
     {
+      "type": "clear_interval",
+      "name": "Dừng check vi phạm",
+      "intervalId": "check_violation"
+    },
+    {
       "type": "run_workflow",
       "name": "7. Chạy luồng tắt live",
-      "workflowPath": "C:\\Users\\Admin\\Downloads\\auto-desktop-master\\workflows\\tat_live.json"
+      "workflowPath": "workflows/turnoff.json"
     }
   ],
   "stopSteps": []

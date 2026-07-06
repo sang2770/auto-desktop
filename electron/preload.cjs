@@ -14,5 +14,16 @@ contextBridge.exposeInMainWorld("desktopApi", {
   captureMousePosition: () => ipcRenderer.invoke("mouse:capture-position"),
   captureRegion: () => ipcRenderer.invoke("screen:capture-region"),
   setWindowSize: (width, height) => ipcRenderer.invoke("window:set-size", width, height),
-  setWindowAlwaysOnTop: (flag) => ipcRenderer.invoke("window:set-always-on-top", flag)
+  setWindowAlwaysOnTop: (flag) => ipcRenderer.invoke("window:set-always-on-top", flag),
+  onStatusChange: (callback) => {
+    const subscription = (_event, status) => callback(status);
+    ipcRenderer.on("workflow-status", subscription);
+    return () => ipcRenderer.removeListener("workflow-status", subscription);
+  },
+  onLog: (callback) => {
+    const subscription = (_event, log) => callback(log);
+    ipcRenderer.on("workflow-log", subscription);
+    return () => ipcRenderer.removeListener("workflow-log", subscription);
+  },
+  captureWindowLayout: () => ipcRenderer.invoke("windows:capture-layout")
 });
