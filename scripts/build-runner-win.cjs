@@ -35,9 +35,9 @@ function resolvePythonLauncher() {
 
   const candidates = process.platform === "win32"
     ? [
-        { command: "py", prefixArgs: ["-3"] },
         { command: "python", prefixArgs: [] },
-        { command: "python3", prefixArgs: [] }
+        { command: "python3", prefixArgs: [] },
+        { command: "py", prefixArgs: ["-3"] }
       ]
     : [
         { command: "python3", prefixArgs: [] },
