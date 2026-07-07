@@ -7,13 +7,12 @@ type RunnerResult = {
 };
 
 type DesktopApi = {
+  getWorkflowDir?: () => Promise<string>;
   listWorkflows: () => Promise<string[]>;
   loadWorkflow: (filePath: string) => Promise<string>;
   saveWorkflow: (payload: { name: string; content: string; filePath?: string }) => Promise<string>;
   deleteWorkflow: (filePath: string) => Promise<boolean>;
   pickWorkflowFile: () => Promise<string | null>;
-
-
   runWorkflow: (payload: { workflow: string }) => Promise<RunnerResult>;
   stopWorkflow: () => Promise<boolean>;
   saveImage: (payload: { name: string; base64: string }) => Promise<string>;
@@ -56,6 +55,9 @@ function writeLocalWorkflows(workflows: Record<string, string>) {
 }
 
 const browserApi: DesktopApi = {
+  async getWorkflowDir() {
+    return "browser://";
+  },
   async listWorkflows() {
     return Object.keys(readLocalWorkflows());
   },

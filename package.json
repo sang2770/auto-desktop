@@ -42,6 +42,7 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "workflows/**/*",
       "package.json"
     ],
     "asar": true,

@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("desktopApi", {
+  getWorkflowDir: () => ipcRenderer.invoke("workflow:get-dir"),
   listWorkflows: () => ipcRenderer.invoke("workflow:list"),
   loadWorkflow: (filePath) => ipcRenderer.invoke("workflow:load", filePath),
   saveWorkflow: (payload) => ipcRenderer.invoke("workflow:save", payload),

@@ -28,3 +28,7 @@ __pycache__/
 # OS files
 .DS_Store
 Thumbs.db
+build/*
+debug_ocr_region.png
+debug_ocr_region.png
+*.pyc

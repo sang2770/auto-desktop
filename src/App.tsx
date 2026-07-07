@@ -2,7 +2,17 @@ import React, { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { desktopApi, isElectronDesktopApi } from "./desktopApi";
 import { sampleWorkflow } from "./sampleWorkflow";
-import type { Workflow, Step, ClickStep, DoubleClickStep, WaitStep, WaitForImageStep, CheckTextStep, LaunchAppStep, ConditionalStep } from "./types";
+import type {
+  Workflow,
+  Step,
+  ClickStep,
+  DoubleClickStep,
+  WaitStep,
+  WaitForImageStep,
+  CheckTextStep,
+  LaunchAppStep,
+  ConditionalStep,
+} from "./types";
 
 const workflowSchema = z.object({
   name: z.string().min(1),
@@ -11,45 +21,116 @@ const workflowSchema = z.object({
     enabled: z.boolean(),
     startAt: z.string(),
     stopAt: z.string(),
-    timezone: z.string()
+    timezone: z.string(),
   }),
   settings: z.object({
     dryRun: z.boolean().optional(),
     retryCount: z.number().int().min(0),
     captureOnError: z.boolean(),
     stepDelaySec: z.number().min(0).optional(),
-    repeat: z.object({
-      enabled: z.boolean(),
-      times: z.number().int().min(0),
-      intervalMs: z.number().int().min(0)
-    }).optional(),
+    repeat: z
+      .object({
+        enabled: z.boolean(),
+        times: z.number().int().min(0),
+        intervalMs: z.number().int().min(0),
+      })
+      .optional(),
     deviceName: z.string().optional(),
     telegramBotToken: z.string().optional(),
     telegramChatId: z.string().optional(),
     reportStartup: z.boolean().optional(),
     reportError: z.boolean().optional(),
-    windowLayout: z.array(z.object({
-      title: z.string(),
-      x: z.number(),
-      y: z.number(),
-      width: z.number(),
-      height: z.number(),
-      enabled: z.boolean()
-    })).optional()
+    windowLayout: z
+      .array(
+        z.object({
+          title: z.string(),
+          x: z.number(),
+          y: z.number(),
+          width: z.number(),
+          height: z.number(),
+          enabled: z.boolean(),
+        }),
+      )
+      .optional(),
   }),
   startSteps: z.array(z.record(z.any())),
-  stopSteps: z.array(z.record(z.any()))
+  stopSteps: z.array(z.record(z.any())),
 });
 
-const sampleJson = JSON.stringify({
-  ...sampleWorkflow,
-  schedule: { enabled: false, startAt: "", stopAt: "", timezone: "Asia/Ho_Chi_Minh" },
-  settings: {
-    ...sampleWorkflow.settings,
-    repeat: { enabled: false, times: 0, intervalMs: 1000 }
+const sampleJson = JSON.stringify(
+  {
+    ...sampleWorkflow,
+    schedule: {
+      enabled: false,
+      startAt: "",
+      stopAt: "",
+      timezone: "Asia/Ho_Chi_Minh",
+    },
+    settings: {
+      ...sampleWorkflow.settings,
+      repeat: { enabled: false, times: 0, intervalMs: 1000 },
+    },
+    stopSteps: [],
   },
-  stopSteps: []
-}, null, 2);
+  null,
+  2,
+);
+
+function resolveWorkflowPaths(
+  workflow: any,
+  savedWorkflows: string[]
+): any {
+  if (!workflow) return workflow;
+
+  const resolvePath = (storedPath: string) => {
+    if (!storedPath) return "";
+    if (savedWorkflows.includes(storedPath)) return storedPath;
+
+    const filename = storedPath.split(/[/\\]/).pop()?.toLowerCase();
+    if (filename) {
+      const matched = savedWorkflows.find(
+        (p) => p.split(/[/\\]/).pop()?.toLowerCase() === filename
+      );
+      if (matched) return matched;
+    }
+
+    return storedPath;
+  };
+
+  const updated = { ...workflow };
+
+  if (Array.isArray(updated.startSteps)) {
+    updated.startSteps = updated.startSteps.map((step: any) => {
+      const newStep = { ...step };
+      if (newStep.type === "run_workflow" && newStep.workflowPath) {
+        newStep.workflowPath = resolvePath(newStep.workflowPath);
+      } else if (newStep.type === "conditional_workflow") {
+        if (newStep.thenWorkflowPath) newStep.thenWorkflowPath = resolvePath(newStep.thenWorkflowPath);
+        if (newStep.elseWorkflowPath) newStep.elseWorkflowPath = resolvePath(newStep.elseWorkflowPath);
+      } else if (newStep.type === "check_interval" && newStep.actionWorkflowPath) {
+        newStep.actionWorkflowPath = resolvePath(newStep.actionWorkflowPath);
+      }
+      return newStep;
+    });
+  }
+
+  if (Array.isArray(updated.stopSteps)) {
+    updated.stopSteps = updated.stopSteps.map((step: any) => {
+      const newStep = { ...step };
+      if (newStep.type === "run_workflow" && newStep.workflowPath) {
+        newStep.workflowPath = resolvePath(newStep.workflowPath);
+      } else if (newStep.type === "conditional_workflow") {
+        if (newStep.thenWorkflowPath) newStep.thenWorkflowPath = resolvePath(newStep.thenWorkflowPath);
+        if (newStep.elseWorkflowPath) newStep.elseWorkflowPath = resolvePath(newStep.elseWorkflowPath);
+      } else if (newStep.type === "check_interval" && newStep.actionWorkflowPath) {
+        newStep.actionWorkflowPath = resolvePath(newStep.actionWorkflowPath);
+      }
+      return newStep;
+    });
+  }
+
+  return updated;
+}
 
 // Image Preview Component that handles both Base64 and Local paths
 function ImagePreview({ filePath }: { filePath?: string }) {
@@ -74,7 +155,8 @@ function ImagePreview({ filePath }: { filePath?: string }) {
     }
   }, [filePath]);
 
-  if (!filePath) return <div className="no-image-preview">Chưa tải ảnh lên</div>;
+  if (!filePath)
+    return <div className="no-image-preview">Chưa tải ảnh lên</div>;
 
   return (
     <div className="image-preview-container">
@@ -98,7 +180,7 @@ function StepCard({
   isFirst,
   isLast,
   savedWorkflows,
-  workflowNames
+  workflowNames,
 }: {
   step: Step;
   index: number;
@@ -113,18 +195,27 @@ function StepCard({
 }) {
   const isSeconds = step.type === "wait" && step.ms % 1000 === 0;
   const [waitUnit, setWaitUnit] = useState<"s" | "ms">(isSeconds ? "s" : "ms");
-  const waitValue = step.type === "wait" ? (waitUnit === "s" ? step.ms / 1000 : step.ms) : 0;
+  const waitValue =
+    step.type === "wait" ? (waitUnit === "s" ? step.ms / 1000 : step.ms) : 0;
 
   const [hasRegion, setHasRegion] = useState(
-    "region" in step && Array.isArray(step.region) && step.region.length === 4
+    "region" in step && Array.isArray(step.region) && step.region.length === 4,
   );
 
   useEffect(() => {
-    setHasRegion("region" in step && Array.isArray(step.region) && step.region.length === 4);
+    setHasRegion(
+      "region" in step &&
+        Array.isArray(step.region) &&
+        step.region.length === 4,
+    );
   }, [step]);
 
   useEffect(() => {
-    setHasRegion("region" in step && Array.isArray(step.region) && step.region.length === 4);
+    setHasRegion(
+      "region" in step &&
+        Array.isArray(step.region) &&
+        step.region.length === 4,
+    );
   }, [step]);
 
   const region = "region" in step && step.region ? step.region : [0, 0, 0, 0];
@@ -155,8 +246,13 @@ function StepCard({
 
   // Region Capture (top-left & bottom-right)
   const [regionCountdown, setRegionCountdown] = useState<number | null>(null);
-  const [regionPhase, setRegionPhase] = useState<"topleft" | "bottomright" | null>(null);
-  const [tempTopLeft, setTempTopLeft] = useState<{ x: number; y: number } | null>(null);
+  const [regionPhase, setRegionPhase] = useState<
+    "topleft" | "bottomright" | null
+  >(null);
+  const [tempTopLeft, setTempTopLeft] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
 
   function startRegionCapture() {
     setRegionPhase("topleft");
@@ -207,7 +303,9 @@ function StepCard({
   }, [regionCountdown, regionPhase]);
 
   // Conditional Click Coords Capture
-  const [condClickCountdown, setCondClickCountdown] = useState<number | null>(null);
+  const [condClickCountdown, setCondClickCountdown] = useState<number | null>(
+    null,
+  );
 
   useEffect(() => {
     if (condClickCountdown === null) return;
@@ -230,7 +328,10 @@ function StepCard({
     }
   }, [condClickCountdown]);
 
-  function handleImageUpload(e: React.ChangeEvent<HTMLInputElement>, fieldName: "image" | "clickImage" | "stopImage") {
+  function handleImageUpload(
+    e: React.ChangeEvent<HTMLInputElement>,
+    fieldName: "image" | "clickImage" | "stopImage",
+  ) {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -239,7 +340,10 @@ function StepCard({
       const base64 = event.target?.result as string;
       if (isElectronDesktopApi) {
         try {
-          const savedPath = await desktopApi.saveImage({ name: file.name, base64 });
+          const savedPath = await desktopApi.saveImage({
+            name: file.name,
+            base64,
+          });
           onUpdate({ ...step, [fieldName]: savedPath } as Step);
         } catch (err) {
           console.error("Error saving image:", err);
@@ -251,16 +355,23 @@ function StepCard({
     reader.readAsDataURL(file);
   }
 
-  const isCoordinateClick = 
-    (step.type === "click" && (!step.clickType || step.clickType === "coordinate")) ||
-    (step.type === "double_click" && (!step.clickType || step.clickType === "coordinate")) ||
-    (step.type === "conditional" && (step.actionType === "click" || step.actionType === "double_click"));
+  const isCoordinateClick =
+    (step.type === "click" &&
+      (!step.clickType || step.clickType === "coordinate")) ||
+    (step.type === "double_click" &&
+      (!step.clickType || step.clickType === "coordinate")) ||
+    (step.type === "conditional" &&
+      (step.actionType === "click" || step.actionType === "double_click"));
 
   return (
-    <div className={`step-card step-${step.type} ${isCoordinateClick ? "coordinate-highlight" : ""}`}>
+    <div
+      className={`step-card step-${step.type} ${isCoordinateClick ? "coordinate-highlight" : ""}`}
+    >
       <div className="step-card-header">
         <div className="step-card-title-group">
-          <span className="step-card-num">#{String(index + 1).padStart(2, "0")}</span>
+          <span className="step-card-num">
+            #{String(index + 1).padStart(2, "0")}
+          </span>
           <span className="step-card-badge">
             {step.type === "launch_app" && "Chạy App"}
             {step.type === "wait" && "Chờ đợi"}
@@ -289,18 +400,33 @@ function StepCard({
               borderBottom: "1px dashed rgba(255,255,255,0.2)",
               color: "#fff",
               fontWeight: 600,
-              padding: "2px 6px"
+              padding: "2px 6px",
             }}
           />
         </div>
         <div className="step-card-actions">
-          <button type="button" onClick={onMoveUp} disabled={isFirst} title="Di chuyển lên">
+          <button
+            type="button"
+            onClick={onMoveUp}
+            disabled={isFirst}
+            title="Di chuyển lên"
+          >
             ↑
           </button>
-          <button type="button" onClick={onMoveDown} disabled={isLast} title="Di chuyển xuống">
+          <button
+            type="button"
+            onClick={onMoveDown}
+            disabled={isLast}
+            title="Di chuyển xuống"
+          >
             ↓
           </button>
-          <button type="button" className="delete-btn" onClick={onDelete} title="Xóa bước">
+          <button
+            type="button"
+            className="delete-btn"
+            onClick={onDelete}
+            title="Xóa bước"
+          >
             Xóa
           </button>
         </div>
@@ -319,13 +445,36 @@ function StepCard({
               } else if (newType === "wait") {
                 onUpdate({ type: "wait", name: step.name, ms: 1000 });
               } else if (newType === "click") {
-                onUpdate({ type: "click", name: step.name, clickType: "coordinate", x: 0, y: 0 });
+                onUpdate({
+                  type: "click",
+                  name: step.name,
+                  clickType: "coordinate",
+                  x: 0,
+                  y: 0,
+                });
               } else if (newType === "double_click") {
-                onUpdate({ type: "double_click", name: step.name, clickType: "coordinate", x: 0, y: 0 });
+                onUpdate({
+                  type: "double_click",
+                  name: step.name,
+                  clickType: "coordinate",
+                  x: 0,
+                  y: 0,
+                });
               } else if (newType === "wait_for_image") {
-                onUpdate({ type: "wait_for_image", name: step.name, image: "", timeoutMs: 5000, confidence: 0.8 });
+                onUpdate({
+                  type: "wait_for_image",
+                  name: step.name,
+                  image: "",
+                  timeoutMs: 5000,
+                  confidence: 0.8,
+                });
               } else if (newType === "check_text") {
-                onUpdate({ type: "check_text", name: step.name, text: "", timeoutMs: 5000 });
+                onUpdate({
+                  type: "check_text",
+                  name: step.name,
+                  text: "",
+                  timeoutMs: 5000,
+                });
               } else if (newType === "conditional") {
                 onUpdate({
                   type: "conditional",
@@ -335,42 +484,93 @@ function StepCard({
                   confidence: 0.8,
                   actionType: "click",
                   clickX: 0,
-                  clickY: 0
+                  clickY: 0,
                 });
               } else if (newType === "run_workflow") {
-                onUpdate({ type: "run_workflow", name: step.name, workflowPath: "" });
+                onUpdate({
+                  type: "run_workflow",
+                  name: step.name,
+                  workflowPath: "",
+                });
               } else if (newType === "conditional_workflow") {
-                onUpdate({ type: "conditional_workflow", name: step.name, conditionType: "image", image: "", confidence: 0.8, thenWorkflowPath: "", elseWorkflowPath: "" });
+                onUpdate({
+                  type: "conditional_workflow",
+                  name: step.name,
+                  conditionType: "image",
+                  image: "",
+                  confidence: 0.8,
+                  thenWorkflowPath: "",
+                  elseWorkflowPath: "",
+                });
               } else if (newType === "check_interval") {
-                onUpdate({ type: "check_interval", name: step.name, intervalId: "loop1", intervalSec: 5, actionWorkflowPath: "", stopConditionType: "image", stopImage: "", stopConfidence: 0.8 });
+                onUpdate({
+                  type: "check_interval",
+                  name: step.name,
+                  intervalId: "loop1",
+                  intervalSec: 5,
+                  actionWorkflowPath: "",
+                  stopConditionType: "image",
+                  stopImage: "",
+                  stopConfidence: 0.8,
+                });
               } else if (newType === "clear_interval") {
-                onUpdate({ type: "clear_interval", name: step.name, intervalId: "loop1" });
+                onUpdate({
+                  type: "clear_interval",
+                  name: step.name,
+                  intervalId: "loop1",
+                });
               } else if (newType === "press_key") {
                 onUpdate({ type: "press_key", name: step.name, key: "f5" });
               } else if (newType === "abort_iteration") {
                 onUpdate({ type: "abort_iteration", name: step.name });
               } else if (newType === "send_telegram") {
-                onUpdate({ type: "send_telegram", name: step.name, botToken: "", chatId: "", message: "Báo cáo kết quả", captureScreen: true, ocrRevenue: false, region: undefined });
+                onUpdate({
+                  type: "send_telegram",
+                  name: step.name,
+                  botToken: "",
+                  chatId: "",
+                  message: "Báo cáo kết quả",
+                  captureScreen: true,
+                  ocrRevenue: false,
+                  region: undefined,
+                });
               }
             }}
           >
             <option value="launch_app">Mở ứng dụng (Launch App)</option>
             <option value="wait">Chờ đợi (Delay / Wait)</option>
             <option value="click">Click chuột (Click)</option>
-            <option value="double_click">Double Click chuột (Double Click)</option>
-            <option value="wait_for_image">Chờ hình ảnh xuất hiện (Wait Image)</option>
-            <option value="check_text">Kiểm tra chữ trên màn hình (Check Text)</option>
-            <option value="conditional">Kiểm tra điều kiện (Nếu xuất hiện thì làm gì...)</option>
+            <option value="double_click">
+              Double Click chuột (Double Click)
+            </option>
+            <option value="wait_for_image">
+              Chờ hình ảnh xuất hiện (Wait Image)
+            </option>
+            <option value="check_text">
+              Kiểm tra chữ trên màn hình (Check Text)
+            </option>
+            <option value="conditional">
+              Kiểm tra điều kiện (Nếu xuất hiện thì làm gì...)
+            </option>
             <option value="run_workflow">Chạy workflow con (Sub-flow)</option>
-            <option value="conditional_workflow">Rẽ nhánh workflow theo điều kiện (If-Else Flow)</option>
-            <option value="check_interval">Kiểm tra lặp chu kỳ (Check Interval)</option>
-            <option value="clear_interval">Xoá lặp chu kỳ (Clear Interval)</option>
+            <option value="conditional_workflow">
+              Rẽ nhánh workflow theo điều kiện (If-Else Flow)
+            </option>
+            <option value="check_interval">
+              Kiểm tra lặp chu kỳ (Check Interval)
+            </option>
+            <option value="clear_interval">
+              Xoá lặp chu kỳ (Clear Interval)
+            </option>
             <option value="press_key">Nhấn phím bàn phím (Press Key)</option>
-            <option value="abort_iteration">Hủy phiên Live hiện tại (Abort Iteration)</option>
-            <option value="send_telegram">Gửi báo cáo Telegram (Send Telegram)</option>
+            <option value="abort_iteration">
+              Hủy phiên Live hiện tại (Abort Iteration)
+            </option>
+            <option value="send_telegram">
+              Gửi báo cáo Telegram (Send Telegram)
+            </option>
           </select>
         </div>
-
 
         {/* Dynamic fields based on type */}
         {step.type === "launch_app" && (
@@ -394,7 +594,10 @@ function StepCard({
                 value={waitValue}
                 onChange={(e) => {
                   const val = parseFloat(e.target.value) || 0;
-                  onUpdate({ ...step, ms: waitUnit === "s" ? val * 1000 : val });
+                  onUpdate({
+                    ...step,
+                    ms: waitUnit === "s" ? val * 1000 : val,
+                  });
                 }}
               />
             </div>
@@ -407,7 +610,7 @@ function StepCard({
                   setWaitUnit(unit);
                   onUpdate({
                     ...step,
-                    ms: unit === "s" ? step.ms : step.ms
+                    ms: unit === "s" ? step.ms : step.ms,
                   });
                 }}
               >
@@ -426,7 +629,10 @@ function StepCard({
                 <select
                   value={step.clickType || "coordinate"}
                   onChange={(e) => {
-                    const clickType = e.target.value as "coordinate" | "image" | "text";
+                    const clickType = e.target.value as
+                      | "coordinate"
+                      | "image"
+                      | "text";
                     if (clickType === "image") {
                       onUpdate({
                         ...step,
@@ -436,7 +642,7 @@ function StepCard({
                         timeoutMs: step.timeoutMs || 5000,
                         x: undefined,
                         y: undefined,
-                        text: undefined
+                        text: undefined,
                       });
                     } else if (clickType === "text") {
                       onUpdate({
@@ -448,7 +654,7 @@ function StepCard({
                         y: undefined,
                         image: undefined,
                         confidence: undefined,
-                        region: undefined
+                        region: undefined,
                       });
                     } else {
                       onUpdate({
@@ -460,7 +666,7 @@ function StepCard({
                         confidence: undefined,
                         timeoutMs: undefined,
                         region: undefined,
-                        text: undefined
+                        text: undefined,
                       });
                     }
                   }}
@@ -471,9 +677,10 @@ function StepCard({
                       ? "Tìm Ảnh rồi Double Click (Khớp hình ảnh)"
                       : "Tìm Ảnh rồi Click (Khớp hình ảnh)"}
                   </option>
-                  <option value="text">Tìm Chữ rồi Click (Nhận diện chữ OCR)</option>
+                  <option value="text">
+                    Tìm Chữ rồi Click (Nhận diện chữ OCR)
+                  </option>
                 </select>
-
               </div>
               {step.clickType === "coordinate" && (
                 <>
@@ -482,7 +689,9 @@ function StepCard({
                     <input
                       type="number"
                       value={step.x ?? 0}
-                      onChange={(e) => onUpdate({ ...step, x: parseInt(e.target.value) || 0 })}
+                      onChange={(e) =>
+                        onUpdate({ ...step, x: parseInt(e.target.value) || 0 })
+                      }
                     />
                   </div>
                   <div className="form-group">
@@ -490,17 +699,33 @@ function StepCard({
                     <input
                       type="number"
                       value={step.y ?? 0}
-                      onChange={(e) => onUpdate({ ...step, y: parseInt(e.target.value) || 0 })}
+                      onChange={(e) =>
+                        onUpdate({ ...step, y: parseInt(e.target.value) || 0 })
+                      }
                     />
                   </div>
-                  <div className="form-group" style={{ gridColumn: "span 2", display: "flex", gap: "8px" }}>
+                  <div
+                    className="form-group"
+                    style={{
+                      gridColumn: "span 2",
+                      display: "flex",
+                      gap: "8px",
+                    }}
+                  >
                     <div style={{ flex: 1 }}>
                       <label>Lấy toạ độ di chuột</label>
                       <button
                         type="button"
                         onClick={() => setCoordsCountdown(3)}
                         disabled={coordsCountdown !== null}
-                        style={{ width: "100%", marginTop: "6px", background: coordsCountdown !== null ? "#c85f1f" : "rgba(255, 255, 255, 0.08)" }}
+                        style={{
+                          width: "100%",
+                          marginTop: "6px",
+                          background:
+                            coordsCountdown !== null
+                              ? "#c85f1f"
+                              : "rgba(255, 255, 255, 0.08)",
+                        }}
                       >
                         {coordsCountdown !== null
                           ? `Di chuột... (${coordsCountdown}s)`
@@ -519,7 +744,11 @@ function StepCard({
                             onUpdate({ ...step, x: cx, y: cy });
                           }
                         }}
-                        style={{ width: "100%", marginTop: "6px", background: "rgba(255, 255, 255, 0.08)" }}
+                        style={{
+                          width: "100%",
+                          marginTop: "6px",
+                          background: "rgba(255, 255, 255, 0.08)",
+                        }}
                       >
                         🎯 Vẽ vùng (Lấy Tâm)
                       </button>
@@ -533,8 +762,13 @@ function StepCard({
                     <label>Thời gian chờ tối đa (giây)</label>
                     <input
                       type="number"
-                      value={((step.timeoutMs || 5000) / 1000)}
-                      onChange={(e) => onUpdate({ ...step, timeoutMs: (parseFloat(e.target.value) || 5) * 1000 })}
+                      value={(step.timeoutMs || 5000) / 1000}
+                      onChange={(e) =>
+                        onUpdate({
+                          ...step,
+                          timeoutMs: (parseFloat(e.target.value) || 5) * 1000,
+                        })
+                      }
                     />
                   </div>
                   <div className="form-group">
@@ -545,7 +779,12 @@ function StepCard({
                       max="1"
                       step="0.05"
                       value={step.confidence ?? 0.8}
-                      onChange={(e) => onUpdate({ ...step, confidence: parseFloat(e.target.value) })}
+                      onChange={(e) =>
+                        onUpdate({
+                          ...step,
+                          confidence: parseFloat(e.target.value),
+                        })
+                      }
                     />
                   </div>
                 </>
@@ -557,7 +796,9 @@ function StepCard({
                     <input
                       type="text"
                       value={step.text ?? ""}
-                      onChange={(e) => onUpdate({ ...step, text: e.target.value })}
+                      onChange={(e) =>
+                        onUpdate({ ...step, text: e.target.value })
+                      }
                       placeholder="Nhập từ hoặc cụm từ cần tìm..."
                     />
                   </div>
@@ -565,8 +806,13 @@ function StepCard({
                     <label>Thời gian chờ tối đa (giây)</label>
                     <input
                       type="number"
-                      value={((step.timeoutMs || 5000) / 1000)}
-                      onChange={(e) => onUpdate({ ...step, timeoutMs: (parseFloat(e.target.value) || 5) * 1000 })}
+                      value={(step.timeoutMs || 5000) / 1000}
+                      onChange={(e) =>
+                        onUpdate({
+                          ...step,
+                          timeoutMs: (parseFloat(e.target.value) || 5) * 1000,
+                        })
+                      }
                     />
                   </div>
                   <div className="form-group">
@@ -576,12 +822,21 @@ function StepCard({
                       onClick={async () => {
                         const res = await desktopApi.captureRegion();
                         if (res) {
-                          onUpdate({ ...step, region: [res.x, res.y, res.width, res.height] });
+                          onUpdate({
+                            ...step,
+                            region: [res.x, res.y, res.width, res.height],
+                          });
                         }
                       }}
-                      style={{ width: "100%", marginTop: "6px", background: "rgba(255, 255, 255, 0.08)" }}
+                      style={{
+                        width: "100%",
+                        marginTop: "6px",
+                        background: "rgba(255, 255, 255, 0.08)",
+                      }}
                     >
-                      {step.region ? `Vùng: [${step.region.join(",")}]` : "🎯 Vẽ vùng tìm kiếm"}
+                      {step.region
+                        ? `Vùng: [${step.region.join(",")}]`
+                        : "🎯 Vẽ vùng tìm kiếm"}
                     </button>
                   </div>
                 </>
@@ -589,13 +844,24 @@ function StepCard({
             </div>
 
             {step.clickType === "image" && (
-              <div className="image-upload-wrapper form-section" style={{ border: "none", margin: 0, padding: 0 }}>
+              <div
+                className="image-upload-wrapper form-section"
+                style={{ border: "none", margin: 0, padding: 0 }}
+              >
                 <div className="form-group">
                   <label>Ảnh mẫu cần Click (Tải lên hoặc chụp màn hình)</label>
-                  <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
+                  <div
+                    style={{ display: "flex", gap: "10px", marginTop: "4px" }}
+                  >
                     <div className="image-upload-box" style={{ flex: 1 }}>
-                      <span className="image-upload-text">📁 Chọn file ảnh</span>
-                      <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, "image")} />
+                      <span className="image-upload-text">
+                        📁 Chọn file ảnh
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleImageUpload(e, "image")}
+                      />
                     </div>
                     <button
                       type="button"
@@ -603,14 +869,20 @@ function StepCard({
                         const res = await desktopApi.captureRegion();
                         if (res) {
                           if (isElectronDesktopApi) {
-                            const path = await desktopApi.saveImage({ name: "crop-click.png", base64: res.base64 });
+                            const path = await desktopApi.saveImage({
+                              name: "crop-click.png",
+                              base64: res.base64,
+                            });
                             onUpdate({ ...step, image: path });
                           } else {
                             onUpdate({ ...step, image: res.base64 });
                           }
                         }
                       }}
-                      style={{ background: "rgba(255,255,255,0.06)", border: "1px dashed rgba(255,255,255,0.2)" }}
+                      style={{
+                        background: "rgba(255,255,255,0.06)",
+                        border: "1px dashed rgba(255,255,255,0.2)",
+                      }}
                     >
                       📷 Chụp trực tiếp
                     </button>
@@ -628,7 +900,12 @@ function StepCard({
                   min="0"
                   step="0.1"
                   value={step.delayBeforeSec ?? 0}
-                  onChange={(e) => onUpdate({ ...step, delayBeforeSec: parseFloat(e.target.value) || 0 })}
+                  onChange={(e) =>
+                    onUpdate({
+                      ...step,
+                      delayBeforeSec: parseFloat(e.target.value) || 0,
+                    })
+                  }
                   placeholder="0"
                 />
               </div>
@@ -639,7 +916,12 @@ function StepCard({
                   min="0"
                   step="0.1"
                   value={step.delayAfterSec ?? 0}
-                  onChange={(e) => onUpdate({ ...step, delayAfterSec: parseFloat(e.target.value) || 0 })}
+                  onChange={(e) =>
+                    onUpdate({
+                      ...step,
+                      delayAfterSec: parseFloat(e.target.value) || 0,
+                    })
+                  }
                   placeholder="0"
                 />
               </div>
@@ -665,7 +947,11 @@ function StepCard({
                 <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
                   <div className="image-upload-box" style={{ flex: 1 }}>
                     <span className="image-upload-text">📁 Chọn file ảnh</span>
-                    <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, "image")} />
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => handleImageUpload(e, "image")}
+                    />
                   </div>
                   <button
                     type="button"
@@ -673,14 +959,20 @@ function StepCard({
                       const res = await desktopApi.captureRegion();
                       if (res) {
                         if (isElectronDesktopApi) {
-                          const path = await desktopApi.saveImage({ name: "crop-wait.png", base64: res.base64 });
+                          const path = await desktopApi.saveImage({
+                            name: "crop-wait.png",
+                            base64: res.base64,
+                          });
                           onUpdate({ ...step, image: path });
                         } else {
                           onUpdate({ ...step, image: res.base64 });
                         }
                       }
                     }}
-                    style={{ background: "rgba(255,255,255,0.06)", border: "1px dashed rgba(255,255,255,0.2)" }}
+                    style={{
+                      background: "rgba(255,255,255,0.06)",
+                      border: "1px dashed rgba(255,255,255,0.2)",
+                    }}
                   >
                     📷 Chụp trực tiếp
                   </button>
@@ -695,7 +987,12 @@ function StepCard({
                 <input
                   type="number"
                   value={step.timeoutMs / 1000}
-                  onChange={(e) => onUpdate({ ...step, timeoutMs: (parseFloat(e.target.value) || 5) * 1000 })}
+                  onChange={(e) =>
+                    onUpdate({
+                      ...step,
+                      timeoutMs: (parseFloat(e.target.value) || 5) * 1000,
+                    })
+                  }
                 />
               </div>
               <div className="form-group">
@@ -706,7 +1003,12 @@ function StepCard({
                   max="1"
                   step="0.05"
                   value={step.confidence ?? 0.8}
-                  onChange={(e) => onUpdate({ ...step, confidence: parseFloat(e.target.value) })}
+                  onChange={(e) =>
+                    onUpdate({
+                      ...step,
+                      confidence: parseFloat(e.target.value),
+                    })
+                  }
                 />
               </div>
             </div>
@@ -729,7 +1031,12 @@ function StepCard({
               <input
                 type="number"
                 value={step.timeoutMs / 1000}
-                onChange={(e) => onUpdate({ ...step, timeoutMs: (parseFloat(e.target.value) || 5) * 1000 })}
+                onChange={(e) =>
+                  onUpdate({
+                    ...step,
+                    timeoutMs: (parseFloat(e.target.value) || 5) * 1000,
+                  })
+                }
               />
             </div>
           </div>
@@ -749,7 +1056,7 @@ function StepCard({
                       conditionType: condType,
                       image: condType === "image" ? "" : undefined,
                       confidence: condType === "image" ? 0.8 : undefined,
-                      text: condType === "text" ? "" : undefined
+                      text: condType === "text" ? "" : undefined,
                     } as Step);
                   }}
                 >
@@ -767,20 +1074,36 @@ function StepCard({
                     max="1"
                     step="0.05"
                     value={step.confidence ?? 0.8}
-                    onChange={(e) => onUpdate({ ...step, confidence: parseFloat(e.target.value) } as Step)}
+                    onChange={(e) =>
+                      onUpdate({
+                        ...step,
+                        confidence: parseFloat(e.target.value),
+                      } as Step)
+                    }
                   />
                 </div>
               )}
             </div>
 
             {step.conditionType === "image" ? (
-              <div className="image-upload-wrapper form-section" style={{ border: "none", margin: 0, padding: 0 }}>
+              <div
+                className="image-upload-wrapper form-section"
+                style={{ border: "none", margin: 0, padding: 0 }}
+              >
                 <div className="form-group">
                   <label>Ảnh mẫu điều kiện cần xuất hiện</label>
-                  <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
+                  <div
+                    style={{ display: "flex", gap: "10px", marginTop: "4px" }}
+                  >
                     <div className="image-upload-box" style={{ flex: 1 }}>
-                      <span className="image-upload-text">📁 Chọn file ảnh</span>
-                      <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, "image")} />
+                      <span className="image-upload-text">
+                        📁 Chọn file ảnh
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleImageUpload(e, "image")}
+                      />
                     </div>
                     <button
                       type="button"
@@ -788,14 +1111,20 @@ function StepCard({
                         const res = await desktopApi.captureRegion();
                         if (res) {
                           if (isElectronDesktopApi) {
-                            const path = await desktopApi.saveImage({ name: "crop-cond.png", base64: res.base64 });
+                            const path = await desktopApi.saveImage({
+                              name: "crop-cond.png",
+                              base64: res.base64,
+                            });
                             onUpdate({ ...step, image: path });
                           } else {
                             onUpdate({ ...step, image: res.base64 });
                           }
                         }
                       }}
-                      style={{ background: "rgba(255,255,255,0.06)", border: "1px dashed rgba(255,255,255,0.2)" }}
+                      style={{
+                        background: "rgba(255,255,255,0.06)",
+                        border: "1px dashed rgba(255,255,255,0.2)",
+                      }}
                     >
                       📷 Chụp trực tiếp
                     </button>
@@ -809,14 +1138,23 @@ function StepCard({
                 <input
                   type="text"
                   value={step.text ?? ""}
-                  onChange={(e) => onUpdate({ ...step, text: e.target.value } as Step)}
+                  onChange={(e) =>
+                    onUpdate({ ...step, text: e.target.value } as Step)
+                  }
                   placeholder="e.g. Lỗi kết nối"
                 />
               </div>
             )}
 
             {/* Action Section */}
-            <div className="form-grid" style={{ marginTop: "8px", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "12px" }}>
+            <div
+              className="form-grid"
+              style={{
+                marginTop: "8px",
+                borderTop: "1px solid rgba(255,255,255,0.06)",
+                paddingTop: "12px",
+              }}
+            >
               <div className="form-group">
                 <label>Thì thực hiện (Hành động)</label>
                 <select
@@ -826,32 +1164,56 @@ function StepCard({
                     onUpdate({
                       ...step,
                       actionType: actType,
-                      clickX: (actType === "click" || actType === "double_click") ? 0 : undefined,
-                      clickY: (actType === "click" || actType === "double_click") ? 0 : undefined,
-                      clickImage: (actType === "click_image" || actType === "double_click_image") ? "" : undefined,
-                      clickConfidence: (actType === "click_image" || actType === "double_click_image") ? 0.8 : undefined,
+                      clickX:
+                        actType === "click" || actType === "double_click"
+                          ? 0
+                          : undefined,
+                      clickY:
+                        actType === "click" || actType === "double_click"
+                          ? 0
+                          : undefined,
+                      clickImage:
+                        actType === "click_image" ||
+                        actType === "double_click_image"
+                          ? ""
+                          : undefined,
+                      clickConfidence:
+                        actType === "click_image" ||
+                        actType === "double_click_image"
+                          ? 0.8
+                          : undefined,
                       command: actType === "launch_app" ? "" : undefined,
-                      waitMs: actType === "wait" ? 1000 : undefined
+                      waitMs: actType === "wait" ? 1000 : undefined,
                     } as Step);
                   }}
                 >
                   <option value="click">Click vào Toạ độ X, Y</option>
-                  <option value="double_click">Double Click vào Toạ độ X, Y</option>
+                  <option value="double_click">
+                    Double Click vào Toạ độ X, Y
+                  </option>
                   <option value="click_image">Click vào Hình ảnh mẫu</option>
-                  <option value="double_click_image">Double Click vào Hình ảnh mẫu</option>
+                  <option value="double_click_image">
+                    Double Click vào Hình ảnh mẫu
+                  </option>
                   <option value="launch_app">Mở ứng dụng khác</option>
                   <option value="wait">Chờ đợi thời gian</option>
                 </select>
               </div>
 
-              {(step.actionType === "click" || step.actionType === "double_click") && (
+              {(step.actionType === "click" ||
+                step.actionType === "double_click") && (
                 <>
                   <div className="form-group">
                     <label>Toạ độ X</label>
                     <input
                       type="number"
                       value={step.clickX ?? 0}
-                      onChange={(e) => onUpdate({ ...step, clickX: parseInt(e.target.value) || 0 } as Step)}
+                      onChange={(e) =>
+                        onUpdate({
+                          ...step,
+                          clickX: parseInt(e.target.value) || 0,
+                        } as Step)
+                      }
                     />
                   </div>
                   <div className="form-group">
@@ -859,17 +1221,36 @@ function StepCard({
                     <input
                       type="number"
                       value={step.clickY ?? 0}
-                      onChange={(e) => onUpdate({ ...step, clickY: parseInt(e.target.value) || 0 } as Step)}
+                      onChange={(e) =>
+                        onUpdate({
+                          ...step,
+                          clickY: parseInt(e.target.value) || 0,
+                        } as Step)
+                      }
                     />
                   </div>
-                  <div className="form-group" style={{ gridColumn: "span 2", display: "flex", gap: "8px" }}>
+                  <div
+                    className="form-group"
+                    style={{
+                      gridColumn: "span 2",
+                      display: "flex",
+                      gap: "8px",
+                    }}
+                  >
                     <div style={{ flex: 1 }}>
                       <label>Lấy toạ độ di chuột</label>
                       <button
                         type="button"
                         onClick={() => setCondClickCountdown(3)}
                         disabled={condClickCountdown !== null}
-                        style={{ width: "100%", marginTop: "6px", background: condClickCountdown !== null ? "#e91e63" : "rgba(255, 255, 255, 0.08)" }}
+                        style={{
+                          width: "100%",
+                          marginTop: "6px",
+                          background:
+                            condClickCountdown !== null
+                              ? "#e91e63"
+                              : "rgba(255, 255, 255, 0.08)",
+                        }}
                       >
                         {condClickCountdown !== null
                           ? `Di chuột... (${condClickCountdown}s)`
@@ -885,10 +1266,18 @@ function StepCard({
                           if (res) {
                             const cx = res.x + Math.round(res.width / 2);
                             const cy = res.y + Math.round(res.height / 2);
-                            onUpdate({ ...step, clickX: cx, clickY: cy } as Step);
+                            onUpdate({
+                              ...step,
+                              clickX: cx,
+                              clickY: cy,
+                            } as Step);
                           }
                         }}
-                        style={{ width: "100%", marginTop: "6px", background: "rgba(255, 255, 255, 0.08)" }}
+                        style={{
+                          width: "100%",
+                          marginTop: "6px",
+                          background: "rgba(255, 255, 255, 0.08)",
+                        }}
                       >
                         🎯 Vẽ vùng (Lấy Tâm)
                       </button>
@@ -897,16 +1286,24 @@ function StepCard({
                 </>
               )}
 
-              {(step.actionType === "click_image" || step.actionType === "double_click_image") && (
+              {(step.actionType === "click_image" ||
+                step.actionType === "double_click_image") && (
                 <div className="form-group">
-                  <label>Độ khớp ảnh click: {step.clickConfidence ?? 0.8}</label>
+                  <label>
+                    Độ khớp ảnh click: {step.clickConfidence ?? 0.8}
+                  </label>
                   <input
                     type="range"
                     min="0.5"
                     max="1"
                     step="0.05"
                     value={step.clickConfidence ?? 0.8}
-                    onChange={(e) => onUpdate({ ...step, clickConfidence: parseFloat(e.target.value) } as Step)}
+                    onChange={(e) =>
+                      onUpdate({
+                        ...step,
+                        clickConfidence: parseFloat(e.target.value),
+                      } as Step)
+                    }
                   />
                 </div>
               )}
@@ -917,7 +1314,9 @@ function StepCard({
                   <input
                     type="text"
                     value={step.command ?? ""}
-                    onChange={(e) => onUpdate({ ...step, command: e.target.value } as Step)}
+                    onChange={(e) =>
+                      onUpdate({ ...step, command: e.target.value } as Step)
+                    }
                     placeholder="e.g. open -a 'TikTok Studio'"
                   />
                 </div>
@@ -929,20 +1328,37 @@ function StepCard({
                   <input
                     type="number"
                     value={(step.waitMs ?? 1000) / 1000}
-                    onChange={(e) => onUpdate({ ...step, waitMs: (parseFloat(e.target.value) || 1) * 1000 } as Step)}
+                    onChange={(e) =>
+                      onUpdate({
+                        ...step,
+                        waitMs: (parseFloat(e.target.value) || 1) * 1000,
+                      } as Step)
+                    }
                   />
                 </div>
               )}
             </div>
 
-            {(step.actionType === "click_image" || step.actionType === "double_click_image") && (
-              <div className="image-upload-wrapper form-section" style={{ border: "none", margin: 0, padding: 0 }}>
+            {(step.actionType === "click_image" ||
+              step.actionType === "double_click_image") && (
+              <div
+                className="image-upload-wrapper form-section"
+                style={{ border: "none", margin: 0, padding: 0 }}
+              >
                 <div className="form-group">
                   <label>Ảnh mẫu click (Tải lên hoặc chụp màn hình)</label>
-                  <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
+                  <div
+                    style={{ display: "flex", gap: "10px", marginTop: "4px" }}
+                  >
                     <div className="image-upload-box" style={{ flex: 1 }}>
-                      <span className="image-upload-text">📁 Chọn file ảnh</span>
-                      <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, "clickImage")} />
+                      <span className="image-upload-text">
+                        📁 Chọn file ảnh
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleImageUpload(e, "clickImage")}
+                      />
                     </div>
                     <button
                       type="button"
@@ -950,14 +1366,20 @@ function StepCard({
                         const res = await desktopApi.captureRegion();
                         if (res) {
                           if (isElectronDesktopApi) {
-                            const path = await desktopApi.saveImage({ name: "crop-clickaction.png", base64: res.base64 });
+                            const path = await desktopApi.saveImage({
+                              name: "crop-clickaction.png",
+                              base64: res.base64,
+                            });
                             onUpdate({ ...step, clickImage: path });
                           } else {
                             onUpdate({ ...step, clickImage: res.base64 });
                           }
                         }
                       }}
-                      style={{ background: "rgba(255,255,255,0.06)", border: "1px dashed rgba(255,255,255,0.2)" }}
+                      style={{
+                        background: "rgba(255,255,255,0.06)",
+                        border: "1px dashed rgba(255,255,255,0.2)",
+                      }}
                     >
                       📷 Chụp trực tiếp
                     </button>
@@ -966,7 +1388,6 @@ function StepCard({
                 <ImagePreview filePath={step.clickImage} />
               </div>
             )}
-
           </>
         )}
 
@@ -975,7 +1396,9 @@ function StepCard({
             <label>Chọn workflow con để chạy</label>
             <select
               value={step.workflowPath}
-              onChange={(e) => onUpdate({ ...step, workflowPath: e.target.value })}
+              onChange={(e) =>
+                onUpdate({ ...step, workflowPath: e.target.value })
+              }
             >
               <option value="">-- Chọn workflow --</option>
               {savedWorkflows.map((path) => (
@@ -1001,7 +1424,7 @@ function StepCard({
                       conditionType: condType,
                       image: condType === "image" ? "" : undefined,
                       confidence: condType === "image" ? 0.8 : undefined,
-                      text: condType === "text" ? "" : undefined
+                      text: condType === "text" ? "" : undefined,
                     } as Step);
                   }}
                 >
@@ -1019,20 +1442,36 @@ function StepCard({
                     max="1"
                     step="0.05"
                     value={step.confidence ?? 0.8}
-                    onChange={(e) => onUpdate({ ...step, confidence: parseFloat(e.target.value) } as Step)}
+                    onChange={(e) =>
+                      onUpdate({
+                        ...step,
+                        confidence: parseFloat(e.target.value),
+                      } as Step)
+                    }
                   />
                 </div>
               )}
             </div>
 
             {step.conditionType === "image" ? (
-              <div className="image-upload-wrapper form-section" style={{ border: "none", margin: 0, padding: 0 }}>
+              <div
+                className="image-upload-wrapper form-section"
+                style={{ border: "none", margin: 0, padding: 0 }}
+              >
                 <div className="form-group">
                   <label>Ảnh mẫu điều kiện cần xuất hiện</label>
-                  <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
+                  <div
+                    style={{ display: "flex", gap: "10px", marginTop: "4px" }}
+                  >
                     <div className="image-upload-box" style={{ flex: 1 }}>
-                      <span className="image-upload-text">📁 Chọn file ảnh</span>
-                      <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, "image")} />
+                      <span className="image-upload-text">
+                        📁 Chọn file ảnh
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleImageUpload(e, "image")}
+                      />
                     </div>
                     <button
                       type="button"
@@ -1040,14 +1479,20 @@ function StepCard({
                         const res = await desktopApi.captureRegion();
                         if (res) {
                           if (isElectronDesktopApi) {
-                            const path = await desktopApi.saveImage({ name: "crop-cond-flow.png", base64: res.base64 });
+                            const path = await desktopApi.saveImage({
+                              name: "crop-cond-flow.png",
+                              base64: res.base64,
+                            });
                             onUpdate({ ...step, image: path });
                           } else {
                             onUpdate({ ...step, image: res.base64 });
                           }
                         }
                       }}
-                      style={{ background: "rgba(255,255,255,0.06)", border: "1px dashed rgba(255,255,255,0.2)" }}
+                      style={{
+                        background: "rgba(255,255,255,0.06)",
+                        border: "1px dashed rgba(255,255,255,0.2)",
+                      }}
                     >
                       📷 Chụp trực tiếp
                     </button>
@@ -1061,18 +1506,29 @@ function StepCard({
                 <input
                   type="text"
                   value={step.text ?? ""}
-                  onChange={(e) => onUpdate({ ...step, text: e.target.value } as Step)}
+                  onChange={(e) =>
+                    onUpdate({ ...step, text: e.target.value } as Step)
+                  }
                   placeholder="e.g. Lỗi kết nối"
                 />
               </div>
             )}
 
-            <div className="form-grid" style={{ marginTop: "12px", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "12px" }}>
+            <div
+              className="form-grid"
+              style={{
+                marginTop: "12px",
+                borderTop: "1px solid rgba(255,255,255,0.06)",
+                paddingTop: "12px",
+              }}
+            >
               <div className="form-group">
                 <label>Nếu ĐÚNG (Thì chạy Flow)</label>
                 <select
                   value={step.thenWorkflowPath ?? ""}
-                  onChange={(e) => onUpdate({ ...step, thenWorkflowPath: e.target.value })}
+                  onChange={(e) =>
+                    onUpdate({ ...step, thenWorkflowPath: e.target.value })
+                  }
                 >
                   <option value="">-- Chọn workflow --</option>
                   {savedWorkflows.map((path) => (
@@ -1087,9 +1543,13 @@ function StepCard({
                 <label>Nếu SAI (Thì chạy Flow - Không bắt buộc)</label>
                 <select
                   value={step.elseWorkflowPath ?? ""}
-                  onChange={(e) => onUpdate({ ...step, elseWorkflowPath: e.target.value })}
+                  onChange={(e) =>
+                    onUpdate({ ...step, elseWorkflowPath: e.target.value })
+                  }
                 >
-                  <option value="">-- Chọn workflow (bỏ qua nếu không cần) --</option>
+                  <option value="">
+                    -- Chọn workflow (bỏ qua nếu không cần) --
+                  </option>
                   {savedWorkflows.map((path) => (
                     <option key={path} value={path}>
                       {workflowNames[path] || path.split(/[/\\]/).pop() || path}
@@ -1109,7 +1569,9 @@ function StepCard({
                 <input
                   type="text"
                   value={step.intervalId}
-                  onChange={(e) => onUpdate({ ...step, intervalId: e.target.value })}
+                  onChange={(e) =>
+                    onUpdate({ ...step, intervalId: e.target.value })
+                  }
                   placeholder="e.g. check_popup"
                 />
               </div>
@@ -1119,7 +1581,12 @@ function StepCard({
                 <input
                   type="number"
                   value={step.intervalSec}
-                  onChange={(e) => onUpdate({ ...step, intervalSec: parseFloat(e.target.value) || 5 })}
+                  onChange={(e) =>
+                    onUpdate({
+                      ...step,
+                      intervalSec: parseFloat(e.target.value) || 5,
+                    })
+                  }
                 />
               </div>
             </div>
@@ -1128,7 +1595,9 @@ function StepCard({
               <label>Workflow thực hiện trong chu kỳ</label>
               <select
                 value={step.actionWorkflowPath ?? ""}
-                onChange={(e) => onUpdate({ ...step, actionWorkflowPath: e.target.value })}
+                onChange={(e) =>
+                  onUpdate({ ...step, actionWorkflowPath: e.target.value })
+                }
               >
                 <option value="">-- Chọn workflow thực hiện --</option>
                 {savedWorkflows.map((path) => (
@@ -1139,7 +1608,14 @@ function StepCard({
               </select>
             </div>
 
-            <div className="form-grid" style={{ marginTop: "12px", borderTop: "1px solid rgba(255,255,255,0.06)", paddingTop: "12px" }}>
+            <div
+              className="form-grid"
+              style={{
+                marginTop: "12px",
+                borderTop: "1px solid rgba(255,255,255,0.06)",
+                paddingTop: "12px",
+              }}
+            >
               <div className="form-group">
                 <label>Điều kiện TỰ ĐỘNG DỪNG (Clear Interval)</label>
                 <select
@@ -1151,7 +1627,7 @@ function StepCard({
                       stopConditionType: condType,
                       stopImage: condType === "image" ? "" : undefined,
                       stopConfidence: condType === "image" ? 0.8 : undefined,
-                      stopText: condType === "text" ? "" : undefined
+                      stopText: condType === "text" ? "" : undefined,
                     } as Step);
                   }}
                 >
@@ -1162,27 +1638,45 @@ function StepCard({
 
               {step.stopConditionType === "image" && (
                 <div className="form-group">
-                  <label>Độ tin cậy khớp dừng: {step.stopConfidence ?? 0.8}</label>
+                  <label>
+                    Độ tin cậy khớp dừng: {step.stopConfidence ?? 0.8}
+                  </label>
                   <input
                     type="range"
                     min="0.5"
                     max="1"
                     step="0.05"
                     value={step.stopConfidence ?? 0.8}
-                    onChange={(e) => onUpdate({ ...step, stopConfidence: parseFloat(e.target.value) } as Step)}
+                    onChange={(e) =>
+                      onUpdate({
+                        ...step,
+                        stopConfidence: parseFloat(e.target.value),
+                      } as Step)
+                    }
                   />
                 </div>
               )}
             </div>
 
             {step.stopConditionType === "image" ? (
-              <div className="image-upload-wrapper form-section" style={{ border: "none", margin: 0, padding: 0 }}>
+              <div
+                className="image-upload-wrapper form-section"
+                style={{ border: "none", margin: 0, padding: 0 }}
+              >
                 <div className="form-group">
                   <label>Ảnh mẫu điều kiện dừng</label>
-                  <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
+                  <div
+                    style={{ display: "flex", gap: "10px", marginTop: "4px" }}
+                  >
                     <div className="image-upload-box" style={{ flex: 1 }}>
-                      <span className="image-upload-text">📁 Chọn file ảnh</span>
-                      <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, "stopImage")} />
+                      <span className="image-upload-text">
+                        📁 Chọn file ảnh
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleImageUpload(e, "stopImage")}
+                      />
                     </div>
                     <button
                       type="button"
@@ -1190,14 +1684,20 @@ function StepCard({
                         const res = await desktopApi.captureRegion();
                         if (res) {
                           if (isElectronDesktopApi) {
-                            const path = await desktopApi.saveImage({ name: "crop-stop-interval.png", base64: res.base64 });
+                            const path = await desktopApi.saveImage({
+                              name: "crop-stop-interval.png",
+                              base64: res.base64,
+                            });
                             onUpdate({ ...step, stopImage: path });
                           } else {
                             onUpdate({ ...step, stopImage: res.base64 });
                           }
                         }
                       }}
-                      style={{ background: "rgba(255,255,255,0.06)", border: "1px dashed rgba(255,255,255,0.2)" }}
+                      style={{
+                        background: "rgba(255,255,255,0.06)",
+                        border: "1px dashed rgba(255,255,255,0.2)",
+                      }}
                     >
                       📷 Chụp trực tiếp
                     </button>
@@ -1211,7 +1711,9 @@ function StepCard({
                 <input
                   type="text"
                   value={step.stopText ?? ""}
-                  onChange={(e) => onUpdate({ ...step, stopText: e.target.value } as Step)}
+                  onChange={(e) =>
+                    onUpdate({ ...step, stopText: e.target.value } as Step)
+                  }
                   placeholder="e.g. Thành công"
                 />
               </div>
@@ -1225,7 +1727,9 @@ function StepCard({
             <input
               type="text"
               value={step.intervalId}
-              onChange={(e) => onUpdate({ ...step, intervalId: e.target.value })}
+              onChange={(e) =>
+                onUpdate({ ...step, intervalId: e.target.value })
+              }
               placeholder="e.g. check_popup, nhập 'all' để dừng toàn bộ"
             />
           </div>
@@ -1236,7 +1740,18 @@ function StepCard({
             <div className="form-group">
               <label>Phím cần nhấn</label>
               <select
-                value={["f5", "enter", "space", "escape", "tab", "backspace"].includes(step.key.toLowerCase()) ? step.key.toLowerCase() : "custom"}
+                value={
+                  [
+                    "f5",
+                    "enter",
+                    "space",
+                    "escape",
+                    "tab",
+                    "backspace",
+                  ].includes(step.key.toLowerCase())
+                    ? step.key.toLowerCase()
+                    : "custom"
+                }
                 onChange={(e) => {
                   const val = e.target.value;
                   onUpdate({ ...step, key: val === "custom" ? "" : val });
@@ -1253,7 +1768,9 @@ function StepCard({
             </div>
 
             {/* Custom key input if custom is selected */}
-            {!["f5", "enter", "space", "escape", "tab", "backspace"].includes(step.key.toLowerCase()) && (
+            {!["f5", "enter", "space", "escape", "tab", "backspace"].includes(
+              step.key.toLowerCase(),
+            ) && (
               <div className="form-group">
                 <label>Nhập tên phím (e.g. f11, a, ctrl, shift)</label>
                 <input
@@ -1275,7 +1792,9 @@ function StepCard({
                 <input
                   type="text"
                   value={step.botToken}
-                  onChange={(e) => onUpdate({ ...step, botToken: e.target.value } as Step)}
+                  onChange={(e) =>
+                    onUpdate({ ...step, botToken: e.target.value } as Step)
+                  }
                   placeholder="Nhập Token Telegram Bot"
                 />
               </div>
@@ -1284,7 +1803,9 @@ function StepCard({
                 <input
                   type="text"
                   value={step.chatId}
-                  onChange={(e) => onUpdate({ ...step, chatId: e.target.value } as Step)}
+                  onChange={(e) =>
+                    onUpdate({ ...step, chatId: e.target.value } as Step)
+                  }
                   placeholder="Nhập ID cuộc trò chuyện hoặc group"
                 />
               </div>
@@ -1294,8 +1815,14 @@ function StepCard({
               <label>Nội dung tin nhắn (message)</label>
               <textarea
                 value={step.message || ""}
-                onChange={(e) => onUpdate({ ...step, message: e.target.value } as Step)}
-                placeholder={step.ocrRevenue ? "Doanh thu phiên live: {current}đ. Tổng tích lũy từ đầu: {total}đ" : "Nhập nội dung thông báo kèm theo..."}
+                onChange={(e) =>
+                  onUpdate({ ...step, message: e.target.value } as Step)
+                }
+                placeholder={
+                  step.ocrRevenue
+                    ? "Doanh thu phiên live: {current}đ. Tổng tích lũy từ đầu: {total}đ"
+                    : "Nhập nội dung thông báo kèm theo..."
+                }
                 rows={2}
                 style={{
                   width: "100%",
@@ -1305,12 +1832,20 @@ function StepCard({
                   color: "#fff",
                   padding: "8px",
                   fontSize: "14px",
-                  fontFamily: "inherit"
+                  fontFamily: "inherit",
                 }}
               />
               {step.ocrRevenue && (
-                <div style={{ fontSize: "0.8rem", color: "rgba(255,255,255,0.4)", marginTop: "4px", fontStyle: "italic" }}>
-                  * Sử dụng {"{current}"} cho doanh thu phiên hiện tại và {"{total}"} cho tổng tích luỹ trong nội dung tin nhắn.
+                <div
+                  style={{
+                    fontSize: "0.8rem",
+                    color: "rgba(255,255,255,0.4)",
+                    marginTop: "4px",
+                    fontStyle: "italic",
+                  }}
+                >
+                  * Sử dụng {"{current}"} cho doanh thu phiên hiện tại và{" "}
+                  {"{total}"} cho tổng tích luỹ trong nội dung tin nhắn.
                 </div>
               )}
             </div>
@@ -1326,16 +1861,21 @@ function StepCard({
                     ...step,
                     ocrRevenue: checked,
                     captureScreen: checked ? false : step.captureScreen,
-                    image: checked ? undefined : step.image
+                    image: checked ? undefined : step.image,
                   } as Step);
                 }}
               />
-              <label htmlFor={`telegram-ocr-${index}`}>Nhận diện doanh thu bằng OCR (OCR Revenue)</label>
+              <label htmlFor={`telegram-ocr-${index}`}>
+                Nhận diện doanh thu bằng OCR (OCR Revenue)
+              </label>
             </div>
 
             {!step.ocrRevenue && (
               <>
-                <div className="form-group-checkbox" style={{ marginTop: "8px" }}>
+                <div
+                  className="form-group-checkbox"
+                  style={{ marginTop: "8px" }}
+                >
                   <input
                     type="checkbox"
                     id={`telegram-capture-${index}`}
@@ -1345,21 +1885,40 @@ function StepCard({
                       onUpdate({
                         ...step,
                         captureScreen: checked,
-                        image: checked ? undefined : step.image
+                        image: checked ? undefined : step.image,
                       } as Step);
                     }}
                   />
-                  <label htmlFor={`telegram-capture-${index}`}>Chụp ảnh màn hình đính kèm (chụp tại thời điểm chạy)</label>
+                  <label htmlFor={`telegram-capture-${index}`}>
+                    Chụp ảnh màn hình đính kèm (chụp tại thời điểm chạy)
+                  </label>
                 </div>
 
                 {step.captureScreen === false && (
-                  <div className="image-upload-wrapper form-section" style={{ border: "none", margin: "10px 0 0 0", padding: 0 }}>
+                  <div
+                    className="image-upload-wrapper form-section"
+                    style={{ border: "none", margin: "10px 0 0 0", padding: 0 }}
+                  >
                     <div className="form-group">
-                      <label>Ảnh đính kèm tĩnh (Tải lên hoặc chụp màn hình trước)</label>
-                      <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
+                      <label>
+                        Ảnh đính kèm tĩnh (Tải lên hoặc chụp màn hình trước)
+                      </label>
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: "10px",
+                          marginTop: "4px",
+                        }}
+                      >
                         <div className="image-upload-box" style={{ flex: 1 }}>
-                          <span className="image-upload-text">📁 Chọn file ảnh</span>
-                          <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, "image")} />
+                          <span className="image-upload-text">
+                            📁 Chọn file ảnh
+                          </span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={(e) => handleImageUpload(e, "image")}
+                          />
                         </div>
                         <button
                           type="button"
@@ -1367,14 +1926,23 @@ function StepCard({
                             const res = await desktopApi.captureRegion();
                             if (res) {
                               if (isElectronDesktopApi) {
-                                const path = await desktopApi.saveImage({ name: "crop-telegram.png", base64: res.base64 });
+                                const path = await desktopApi.saveImage({
+                                  name: "crop-telegram.png",
+                                  base64: res.base64,
+                                });
                                 onUpdate({ ...step, image: path } as Step);
                               } else {
-                                onUpdate({ ...step, image: res.base64 } as Step);
+                                onUpdate({
+                                  ...step,
+                                  image: res.base64,
+                                } as Step);
                               }
                             }
                           }}
-                          style={{ background: "rgba(255,255,255,0.06)", border: "1px dashed rgba(255,255,255,0.2)" }}
+                          style={{
+                            background: "rgba(255,255,255,0.06)",
+                            border: "1px dashed rgba(255,255,255,0.2)",
+                          }}
                         >
                           📷 Chụp trực tiếp
                         </button>
@@ -1389,8 +1957,21 @@ function StepCard({
         )}
 
         {/* Region config common helper for visual steps */}
-        {("region" in step || ["send_telegram", "wait_for_image", "check_text", "click", "double_click", "conditional", "conditional_workflow", "check_interval"].includes(step.type)) && (
-          <div className="form-section" style={{ border: "none", margin: 0, padding: 0 }}>
+        {("region" in step ||
+          [
+            "send_telegram",
+            "wait_for_image",
+            "check_text",
+            "click",
+            "double_click",
+            "conditional",
+            "conditional_workflow",
+            "check_interval",
+          ].includes(step.type)) && (
+          <div
+            className="form-section"
+            style={{ border: "none", margin: 0, padding: 0 }}
+          >
             <div className="form-group-checkbox">
               <input
                 type="checkbox"
@@ -1409,7 +1990,9 @@ function StepCard({
                   }
                 }}
               />
-              <label htmlFor={`check-region-${index}`}>Giới hạn vùng quét màn hình (Region)</label>
+              <label htmlFor={`check-region-${index}`}>
+                Giới hạn vùng quét màn hình (Region)
+              </label>
             </div>
 
             {hasRegion && (
@@ -1422,7 +2005,12 @@ function StepCard({
                     onChange={(e) =>
                       onUpdate({
                         ...step,
-                        region: [parseInt(e.target.value) || 0, region[1], region[2], region[3]]
+                        region: [
+                          parseInt(e.target.value) || 0,
+                          region[1],
+                          region[2],
+                          region[3],
+                        ],
                       } as Step)
                     }
                   />
@@ -1435,7 +2023,12 @@ function StepCard({
                     onChange={(e) =>
                       onUpdate({
                         ...step,
-                        region: [region[0], parseInt(e.target.value) || 0, region[2], region[3]]
+                        region: [
+                          region[0],
+                          parseInt(e.target.value) || 0,
+                          region[2],
+                          region[3],
+                        ],
                       } as Step)
                     }
                   />
@@ -1448,7 +2041,12 @@ function StepCard({
                     onChange={(e) =>
                       onUpdate({
                         ...step,
-                        region: [region[0], region[1], parseInt(e.target.value) || 0, region[3]]
+                        region: [
+                          region[0],
+                          region[1],
+                          parseInt(e.target.value) || 0,
+                          region[3],
+                        ],
                       } as Step)
                     }
                   />
@@ -1461,24 +2059,39 @@ function StepCard({
                     onChange={(e) =>
                       onUpdate({
                         ...step,
-                        region: [region[0], region[1], region[2], parseInt(e.target.value) || 0]
+                        region: [
+                          region[0],
+                          region[1],
+                          region[2],
+                          parseInt(e.target.value) || 0,
+                        ],
                       } as Step)
                     }
                   />
                 </div>
-                <div className="form-group" style={{ gridColumn: "span 4", display: "flex", gap: "8px" }}>
+                <div
+                  className="form-group"
+                  style={{ gridColumn: "span 4", display: "flex", gap: "8px" }}
+                >
                   <div style={{ flex: 1 }}>
                     <label>Lấy vùng quét di chuột</label>
                     <button
                       type="button"
                       onClick={startRegionCapture}
                       disabled={regionCountdown !== null}
-                      style={{ width: "100%", marginTop: "6px", background: regionCountdown !== null ? "#3b82f6" : "rgba(255, 255, 255, 0.08)" }}
+                      style={{
+                        width: "100%",
+                        marginTop: "6px",
+                        background:
+                          regionCountdown !== null
+                            ? "#3b82f6"
+                            : "rgba(255, 255, 255, 0.08)",
+                      }}
                     >
                       {regionCountdown !== null
-                        ? (regionPhase === "topleft"
+                        ? regionPhase === "topleft"
                           ? `Góc TRÊN - TRÁI... (${regionCountdown}s)`
-                          : `Góc DƯỚI - PHẢI... (${regionCountdown}s)`)
+                          : `Góc DƯỚI - PHẢI... (${regionCountdown}s)`
                         : "🔍 Di chuột 2 góc"}
                     </button>
                   </div>
@@ -1491,11 +2104,15 @@ function StepCard({
                         if (res) {
                           onUpdate({
                             ...step,
-                            region: [res.x, res.y, res.width, res.height]
+                            region: [res.x, res.y, res.width, res.height],
                           } as Step);
                         }
                       }}
-                      style={{ width: "100%", marginTop: "6px", background: "rgba(255, 255, 255, 0.08)" }}
+                      style={{
+                        width: "100%",
+                        marginTop: "6px",
+                        background: "rgba(255, 255, 255, 0.08)",
+                      }}
                     >
                       🎯 Vẽ vùng quét (Lightshot)
                     </button>
@@ -1525,13 +2142,16 @@ function App() {
   const [status, setStatus] = useState<string>("Sẵn sàng");
   const [logs, setLogs] = useState<string[]>([
     "Khởi tạo trình quản lý workflow.",
-    "Workflow mẫu đã được tải thành công."
+    "Workflow mẫu đã được tải thành công.",
   ]);
   const [savedWorkflows, setSavedWorkflows] = useState<string[]>([]);
-  const [workflowNames, setWorkflowNames] = useState<Record<string, string>>({});
+  const [workflowNames, setWorkflowNames] = useState<Record<string, string>>(
+    {},
+  );
   const [activeTab, setActiveTab] = useState<"visual" | "json">("visual");
-  const [rightPanelTab, setRightPanelTab] = useState<"summary" | "logs">("summary");
-
+  const [rightPanelTab, setRightPanelTab] = useState<"summary" | "logs">(
+    "summary",
+  );
 
   useEffect(() => {
     async function loadNames() {
@@ -1572,7 +2192,7 @@ function App() {
       setStatus("Chạy trên trình duyệt");
       setLogs((current) => [
         "Chế độ Web: Các chức năng thiết kế hoạt động bình thường, nhưng tự động hóa màn hình thực tế cần chạy trên Electron.",
-        ...current
+        ...current,
       ]);
     }
   }, []);
@@ -1606,30 +2226,40 @@ function App() {
     if (desktopApi.onLog) {
       cleanupLog = desktopApi.onLog((logLine) => {
         setLogs((current) => [logLine, ...current]);
-        
+
         const match = logLine.match(/Step (\d+)\/\d+:/);
         if (match) {
           const stepIdx = parseInt(match[1], 10) - 1;
           setCurrentStepIdx(stepIdx);
         }
-        
-        const isErrorSignal = logLine.includes("ERROR:") || logLine.includes("Traceback") || logLine.includes("TimeoutError") || logLine.includes("RuntimeError") || logLine.includes("ValueError");
-        
+
+        const isErrorSignal =
+          logLine.includes("ERROR:") ||
+          logLine.includes("Traceback") ||
+          logLine.includes("TimeoutError") ||
+          logLine.includes("RuntimeError") ||
+          logLine.includes("ValueError");
+
         if (isErrorSignal) {
           setCurrentStepIdx((curr) => {
             if (curr !== null) {
               setFailedStepIdx(curr);
-              
-              const isTraceback = logLine.includes("Traceback") || logLine.includes("TRACE:") || logLine.includes("File \"");
+
+              const isTraceback =
+                logLine.includes("Traceback") ||
+                logLine.includes("TRACE:") ||
+                logLine.includes('File "');
               if (!isTraceback) {
                 let errMsg = "";
-                const errorMatch = logLine.match(/(?:ERROR:|TimeoutError:|RuntimeError:|ValueError:)\s*(.*)/i);
+                const errorMatch = logLine.match(
+                  /(?:ERROR:|TimeoutError:|RuntimeError:|ValueError:)\s*(.*)/i,
+                );
                 if (errorMatch && errorMatch[1]) {
                   errMsg = cleanErrorMessage(errorMatch[1].trim());
                 } else {
                   errMsg = logLine.replace(/^\[[^\]]+\]\s*/, "").trim();
                 }
-                
+
                 if (errMsg) {
                   setStepErrors((prev) => ({ ...prev, [curr]: errMsg }));
                 }
@@ -1697,7 +2327,7 @@ function App() {
 
   const parsed = useMemo(() => {
     try {
-      const json = JSON.parse(workflowText);
+      let json = JSON.parse(workflowText);
 
       // Auto fill loop properties if not present
       if (json.settings && !json.settings.repeat) {
@@ -1706,21 +2336,56 @@ function App() {
 
       // Ensure schedule is present to satisfy schema but disabled
       if (!json.schedule) {
-        json.schedule = { enabled: false, startAt: "", stopAt: "", timezone: "Asia/Ho_Chi_Minh" };
+        json.schedule = {
+          enabled: false,
+          startAt: "",
+          stopAt: "",
+          timezone: "Asia/Ho_Chi_Minh",
+        };
       }
       if (!json.stopSteps) {
         json.stopSteps = [];
       }
 
+      // Default check_interval stop condition fields if not present
+      const defaultCheckIntervalFields = (steps: any[]) => {
+        if (!Array.isArray(steps)) return steps;
+        return steps.map((step) => {
+          if (step.type === "check_interval") {
+            const updated = { ...step };
+            if (!updated.stopConditionType) {
+              updated.stopConditionType = "image";
+            }
+            if (updated.stopConfidence === undefined) {
+              updated.stopConfidence = 0.8;
+            }
+            return updated;
+          }
+          return step;
+        });
+      };
+
+      json.startSteps = defaultCheckIntervalFields(json.startSteps);
+      json.stopSteps = defaultCheckIntervalFields(json.stopSteps);
+
+      // Resolve sub-workflow paths using the current machine's saved workflows
+      json = resolveWorkflowPaths(json, savedWorkflows);
+
       const result = workflowSchema.safeParse(json);
       if (!result.success) {
-        return { ok: false as const, error: result.error.issues[0]?.message ?? "Workflow không hợp lệ." };
+        return {
+          ok: false as const,
+          error: result.error.issues[0]?.message ?? "Workflow không hợp lệ.",
+        };
       }
       return { ok: true as const, value: json as Workflow };
     } catch (error) {
-      return { ok: false as const, error: error instanceof Error ? error.message : "Lỗi cú pháp JSON." };
+      return {
+        ok: false as const,
+        error: error instanceof Error ? error.message : "Lỗi cú pháp JSON.",
+      };
     }
-  }, [workflowText]);
+  }, [workflowText, savedWorkflows]);
 
   function updateWorkflow(newWorkflow: Workflow) {
     setWorkflowText(JSON.stringify(newWorkflow, null, 2));
@@ -1728,19 +2393,25 @@ function App() {
 
   const workflow = parsed.ok ? parsed.value : null;
 
-  function updateSettings<K extends keyof Workflow["settings"]>(field: K, value: Workflow["settings"][K]) {
+  function updateSettings<K extends keyof Workflow["settings"]>(
+    field: K,
+    value: Workflow["settings"][K],
+  ) {
     if (!workflow) return;
     updateWorkflow({
       ...workflow,
-      settings: { ...workflow.settings, [field]: value }
+      settings: { ...workflow.settings, [field]: value },
     });
   }
 
-  function updateWorkflowField<K extends keyof Workflow>(field: K, value: Workflow[K]) {
+  function updateWorkflowField<K extends keyof Workflow>(
+    field: K,
+    value: Workflow[K],
+  ) {
     if (!workflow) return;
     updateWorkflow({
       ...workflow,
-      [field]: value
+      [field]: value,
     });
   }
 
@@ -1760,26 +2431,86 @@ function App() {
     } else if (type === "wait") {
       newStep = { type: "wait", name: "Chờ 1 giây", ms: 1000 };
     } else if (type === "click") {
-      newStep = { type: "click", name: "Click chuột", clickType: "coordinate", x: 0, y: 0, delayBeforeSec: 0, delayAfterSec: 0 };
+      newStep = {
+        type: "click",
+        name: "Click chuột",
+        clickType: "coordinate",
+        x: 0,
+        y: 0,
+        delayBeforeSec: 0,
+        delayAfterSec: 0,
+      };
     } else if (type === "double_click") {
-      newStep = { type: "double_click", name: "Double click chuột", clickType: "coordinate", x: 0, y: 0, delayBeforeSec: 0, delayAfterSec: 0 };
+      newStep = {
+        type: "double_click",
+        name: "Double click chuột",
+        clickType: "coordinate",
+        x: 0,
+        y: 0,
+        delayBeforeSec: 0,
+        delayAfterSec: 0,
+      };
     } else if (type === "wait_for_image") {
-
-      newStep = { type: "wait_for_image", name: "Đợi ảnh mẫu xuất hiện", image: "", timeoutMs: 5000, confidence: 0.8 };
+      newStep = {
+        type: "wait_for_image",
+        name: "Đợi ảnh mẫu xuất hiện",
+        image: "",
+        timeoutMs: 5000,
+        confidence: 0.8,
+      };
     } else if (type === "check_text") {
-      newStep = { type: "check_text", name: "Kiểm tra chữ màn hình", text: "", timeoutMs: 5000 };
+      newStep = {
+        type: "check_text",
+        name: "Kiểm tra chữ màn hình",
+        text: "",
+        timeoutMs: 5000,
+      };
     } else if (type === "run_workflow") {
-      newStep = { type: "run_workflow", name: "Chạy workflow con", workflowPath: "" };
+      newStep = {
+        type: "run_workflow",
+        name: "Chạy workflow con",
+        workflowPath: "",
+      };
     } else if (type === "conditional_workflow") {
-      newStep = { type: "conditional_workflow", name: "Rẽ nhánh workflow", conditionType: "image", image: "", confidence: 0.8, thenWorkflowPath: "", elseWorkflowPath: "" };
+      newStep = {
+        type: "conditional_workflow",
+        name: "Rẽ nhánh workflow",
+        conditionType: "image",
+        image: "",
+        confidence: 0.8,
+        thenWorkflowPath: "",
+        elseWorkflowPath: "",
+      };
     } else if (type === "check_interval") {
-      newStep = { type: "check_interval", name: "Lặp chu kỳ kiểm tra", intervalId: "loop_" + Math.random().toString(36).substr(2, 5), intervalSec: 5, actionWorkflowPath: "", stopConditionType: "image", stopImage: "", stopConfidence: 0.8 };
+      newStep = {
+        type: "check_interval",
+        name: "Lặp chu kỳ kiểm tra",
+        intervalId: "loop_" + Math.random().toString(36).substr(2, 5),
+        intervalSec: 5,
+        actionWorkflowPath: "",
+        stopConditionType: "image",
+        stopImage: "",
+        stopConfidence: 0.8,
+      };
     } else if (type === "clear_interval") {
-      newStep = { type: "clear_interval", name: "Dừng lặp chu kỳ", intervalId: "" };
+      newStep = {
+        type: "clear_interval",
+        name: "Dừng lặp chu kỳ",
+        intervalId: "",
+      };
     } else if (type === "press_key") {
       newStep = { type: "press_key", name: "Nhấn phím bàn phím", key: "f5" };
     } else if (type === "send_telegram") {
-      newStep = { type: "send_telegram", name: "Gửi báo cáo Telegram", botToken: "", chatId: "", message: "Báo cáo kết quả", captureScreen: true, ocrRevenue: false, region: undefined };
+      newStep = {
+        type: "send_telegram",
+        name: "Gửi báo cáo Telegram",
+        botToken: "",
+        chatId: "",
+        message: "Báo cáo kết quả",
+        captureScreen: true,
+        ocrRevenue: false,
+        region: undefined,
+      };
     } else {
       newStep = {
         type: "conditional",
@@ -1789,11 +2520,15 @@ function App() {
         confidence: 0.8,
         actionType: "click",
         clickX: 0,
-        clickY: 0
+        clickY: 0,
       };
     }
 
-    updateWorkflow({ ...workflow, startSteps: [...workflow.startSteps, newStep], stopSteps: [] });
+    updateWorkflow({
+      ...workflow,
+      startSteps: [...workflow.startSteps, newStep],
+      stopSteps: [],
+    });
     setLogs((current) => [`Đã thêm bước mới [${type}].`, ...current]);
   }
 
@@ -1823,13 +2558,22 @@ function App() {
     }
 
     try {
-      const oldFilename = loadedPath ? loadedPath.split(/[/\\]/).pop() || "" : "";
-      const newSafeName = parsed.value.name.replace(/[^a-z0-9-_]+/gi, "-").toLowerCase() + ".json";
-      
+      const oldFilename = loadedPath
+        ? loadedPath.split(/[/\\]/).pop() || ""
+        : "";
+      const newSafeName =
+        parsed.value.name.replace(/[^a-z0-9-_]+/gi, "-").toLowerCase() +
+        ".json";
+
       let filePathToSave = loadedPath || undefined;
       let oldFileToDelete = null;
 
-      if (loadedPath && oldFilename && !loadedPath.startsWith("browser://") && oldFilename.toLowerCase() !== newSafeName.toLowerCase()) {
+      if (
+        loadedPath &&
+        oldFilename &&
+        !loadedPath.startsWith("browser://") &&
+        oldFilename.toLowerCase() !== newSafeName.toLowerCase()
+      ) {
         const separator = loadedPath.includes("\\") ? "\\" : "/";
         const parts = loadedPath.split(separator);
         parts.pop();
@@ -1837,10 +2581,11 @@ function App() {
         oldFileToDelete = loadedPath;
       }
 
+      const resolvedContent = JSON.stringify(parsed.value, null, 2);
       const path = await desktopApi.saveWorkflow({
         name: parsed.value.name,
-        content: workflowText,
-        filePath: filePathToSave
+        content: resolvedContent,
+        filePath: filePathToSave,
       });
 
       if (path) {
@@ -1850,18 +2595,25 @@ function App() {
               ? await window.desktopApi?.deleteWorkflow(oldFileToDelete)
               : await desktopApi.deleteWorkflow(oldFileToDelete);
             if (success) {
-              setLogs((current) => [`Đã dọn dẹp file cũ: ${oldFileToDelete}`, ...current]);
+              setLogs((current) => [
+                `Đã dọn dẹp file cũ: ${oldFileToDelete}`,
+                ...current,
+              ]);
             }
           } catch (delErr) {
             console.error("Failed to delete old file during rename:", delErr);
           }
         }
+        setWorkflowText(resolvedContent);
         setLoadedPath(path);
         setSavedWorkflows(await desktopApi.listWorkflows());
 
         const relativePath = path.replace(window.location.origin, "");
         setStatus(`Đã lưu tại ${relativePath}`);
-        setLogs((current) => [`Lưu thành công tại ${relativePath}`, ...current]);
+        setLogs((current) => [
+          `Lưu thành công tại ${relativePath}`,
+          ...current,
+        ]);
       } else {
         setStatus("Không thể lưu quy trình.");
       }
@@ -1871,7 +2623,6 @@ function App() {
     }
   }
 
-
   async function handleLoad(filePath?: string) {
     const target = filePath ?? (await desktopApi.pickWorkflowFile());
     if (!target) {
@@ -1880,27 +2631,67 @@ function App() {
       }
       return;
     }
-    const content = await desktopApi.loadWorkflow(target);
-    setWorkflowText(content);
-    setLoadedPath(target);
-    setStatus(`Đã tải ${target}`);
-    setLogs((current) => [`Đã tải workflow từ ${target}.`, ...current]);
+    try {
+      const content = await desktopApi.loadWorkflow(target);
+
+      let finalPath = target;
+      if (!filePath) {
+        // This is an external import, copy it to the local app workflow dir
+        try {
+          const parsedWorkflow = JSON.parse(content);
+          const name =
+            parsedWorkflow.name ||
+            target.split(/[/\\]/).pop()?.replace(".json", "") ||
+            "Imported Workflow";
+
+          finalPath = await desktopApi.saveWorkflow({
+            name,
+            content,
+          });
+
+          setLogs((current) => [
+            `Đã nhập và sao chép workflow vào thư mục ứng dụng.`,
+            ...current,
+          ]);
+        } catch (e) {
+          console.error("Error copying imported workflow:", e);
+        }
+      }
+
+      setWorkflowText(content);
+      setLoadedPath(finalPath);
+
+      // Refresh list
+      const updated = await desktopApi.listWorkflows();
+      setSavedWorkflows(updated);
+
+      setStatus(`Đã tải ${finalPath}`);
+      setLogs((current) => [`Đã tải workflow từ ${finalPath}.`, ...current]);
+    } catch (err) {
+      console.error("Error loading workflow:", err);
+      setStatus("Lỗi khi tải quy trình.");
+    }
   }
 
   function handleCreateNewWorkflow() {
     const newWorkflow: Workflow = {
       name: "Quy trình mới",
       description: "Quy trình tự động hóa mới.",
-      schedule: { enabled: false, startAt: "", stopAt: "", timezone: "Asia/Ho_Chi_Minh" },
+      schedule: {
+        enabled: false,
+        startAt: "",
+        stopAt: "",
+        timezone: "Asia/Ho_Chi_Minh",
+      },
       settings: {
         dryRun: false,
         retryCount: 0,
         captureOnError: true,
         stepDelaySec: 0,
-        repeat: { enabled: false, times: 0, intervalMs: 1000 }
+        repeat: { enabled: false, times: 0, intervalMs: 1000 },
       },
       startSteps: [],
-      stopSteps: []
+      stopSteps: [],
     };
     setWorkflowText(JSON.stringify(newWorkflow, null, 2));
     setLoadedPath("");
@@ -1917,11 +2708,11 @@ function App() {
       const success = isElectronDesktopApi
         ? await window.desktopApi?.deleteWorkflow(filePath)
         : await desktopApi.deleteWorkflow(filePath);
-      
+
       if (success) {
         setLogs((current) => [`Đã xóa quy trình: ${filePath}`, ...current]);
         setStatus("Xóa quy trình thành công");
-        
+
         // Refresh list
         const updated = await desktopApi.listWorkflows();
         setSavedWorkflows(updated);
@@ -1938,7 +2729,6 @@ function App() {
     }
   }
 
-
   async function handleRun() {
     if (!parsed.ok) {
       setStatus(`Không thể chạy: ${parsed.error}`);
@@ -1952,14 +2742,23 @@ function App() {
     setStepErrors({});
     setDebugOcrImage(null);
     setStatus("Đang chạy tự động...");
-    setLogs((current) => [`Trình chạy bắt đầu lúc ${new Date().toLocaleTimeString()}.`, ...current]);
+    setLogs((current) => [
+      `Trình chạy bắt đầu lúc ${new Date().toLocaleTimeString()}.`,
+      ...current,
+    ]);
     try {
       const result = await desktopApi.runWorkflow({ workflow: workflowText });
       if (!isElectronDesktopApi) {
-        const chunks = [result.stdout.trim(), result.stderr.trim()].filter(Boolean);
+        const chunks = [result.stdout.trim(), result.stderr.trim()].filter(
+          Boolean,
+        );
         setLogs((current) => [...chunks.reverse(), ...current]);
       }
-      setStatus(result.code === 0 ? "Chạy hoàn tất thành công" : `Lỗi runner, mã thoát: ${result.code}`);
+      setStatus(
+        result.code === 0
+          ? "Chạy hoàn tất thành công"
+          : `Lỗi runner, mã thoát: ${result.code}`,
+      );
     } catch (err) {
       setStatus(`Lỗi: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
@@ -1982,19 +2781,23 @@ function App() {
         setStatus("Không thể dừng quy trình (hoặc quy trình đã kết thúc).");
       }
     } catch (err) {
-      setStatus(`Lỗi khi dừng: ${err instanceof Error ? err.message : String(err)}`);
+      setStatus(
+        `Lỗi khi dừng: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
   if (isCompact) {
     const latestLog = logs[0] || "Chưa có nhật ký hoạt động nào.";
-    const statusDotClass = isRunning 
-      ? (isPaused ? "paused" : "running") 
-      : status.includes("Lỗi") 
-      ? "error" 
-      : status.includes("thành công") 
-      ? "success" 
-      : "idle";
+    const statusDotClass = isRunning
+      ? isPaused
+        ? "paused"
+        : "running"
+      : status.includes("Lỗi")
+        ? "error"
+        : status.includes("thành công")
+          ? "success"
+          : "idle";
 
     return (
       <div className="compact-container">
@@ -2014,10 +2817,13 @@ function App() {
               value={loadedPath}
               onChange={(e) => handleLoad(e.target.value)}
             >
-              <option value="" disabled>-- Chọn quy trình --</option>
+              <option value="" disabled>
+                -- Chọn quy trình --
+              </option>
               {savedWorkflows.map((path) => {
                 const filename = path.split(/[/\\]/).pop() || path;
-                const displayName = workflowNames[path] || filename.replace(".json", "");
+                const displayName =
+                  workflowNames[path] || filename.replace(".json", "");
                 return (
                   <option key={path} value={path}>
                     {displayName}
@@ -2040,19 +2846,23 @@ function App() {
 
           <div>
             {isRunning ? (
-              <button 
-                className={`compact-action-btn stop-btn ${isPaused ? "paused" : ""}`} 
-                onClick={handleStop} 
-                style={{ 
-                  backgroundColor: isPaused ? "#f59e0b" : "#dc3545", 
+              <button
+                className={`compact-action-btn stop-btn ${isPaused ? "paused" : ""}`}
+                onClick={handleStop}
+                style={{
+                  backgroundColor: isPaused ? "#f59e0b" : "#dc3545",
                   color: "#fff",
-                  transition: "all 0.3s ease"
+                  transition: "all 0.3s ease",
                 }}
               >
                 {isPaused ? "⏸️ Tạm dừng (Dừng)" : "🛑 Dừng quy trình"}
               </button>
             ) : (
-              <button className="compact-action-btn run-btn" onClick={handleRun} disabled={!workflow}>
+              <button
+                className="compact-action-btn run-btn"
+                onClick={handleRun}
+                disabled={!workflow}
+              >
                 ▶ Chạy quy trình
               </button>
             )}
@@ -2066,9 +2876,7 @@ function App() {
               </div>
             </div>
             <div className="compact-log-title">Log mới nhất:</div>
-            <div className="compact-log-box">
-              {latestLog}
-            </div>
+            <div className="compact-log-box">{latestLog}</div>
           </div>
         </div>
       </div>
@@ -2081,7 +2889,11 @@ function App() {
       <aside className="sidebar">
         <div className="sidebar-header">
           <h2>📂 Quy trình</h2>
-          <button className="create-btn" onClick={handleCreateNewWorkflow} title="Tạo quy trình mới">
+          <button
+            className="create-btn"
+            onClick={handleCreateNewWorkflow}
+            title="Tạo quy trình mới"
+          >
             +
           </button>
         </div>
@@ -2090,15 +2902,30 @@ function App() {
             {savedWorkflows.map((path) => {
               const filename = path.split(/[/\\]/).pop() || path;
               const isActive = loadedPath === path;
-              const displayName = path === loadedPath && workflow 
-                ? workflow.name 
-                : (workflowNames[path] || filename.replace(".json", ""));
+              const displayName =
+                path === loadedPath && workflow
+                  ? workflow.name
+                  : workflowNames[path] || filename.replace(".json", "");
               return (
-                <li key={path} className={`workflow-item ${isActive ? "active" : ""}`}>
-                  <span className="workflow-name" onClick={() => handleLoad(path)} title={path}>
+                <li
+                  key={path}
+                  className={`workflow-item ${isActive ? "active" : ""}`}
+                >
+                  <span
+                    className="workflow-name"
+                    onClick={() => handleLoad(path)}
+                    title={path}
+                  >
                     📄 {displayName}
                   </span>
-                  <button className="delete-item-btn" onClick={(e) => { e.stopPropagation(); handleDeleteWorkflow(path); }} title="Xóa quy trình">
+                  <button
+                    className="delete-item-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDeleteWorkflow(path);
+                    }}
+                    title="Xóa quy trình"
+                  >
                     🗑️
                   </button>
                 </li>
@@ -2110,7 +2937,9 @@ function App() {
           </ul>
         </div>
         <div className="sidebar-footer">
-          <button className="import-btn" onClick={() => handleLoad()}>📁 Nhập file JSON</button>
+          <button className="import-btn" onClick={() => handleLoad()}>
+            📁 Nhập file JSON
+          </button>
         </div>
       </aside>
 
@@ -2121,11 +2950,15 @@ function App() {
           <div className="panelHeader">
             <div>
               {workflow ? (
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <div
+                  style={{ display: "flex", alignItems: "center", gap: "8px" }}
+                >
                   <input
                     type="text"
                     value={workflow.name}
-                    onChange={(e) => updateWorkflowField("name", e.target.value)}
+                    onChange={(e) =>
+                      updateWorkflowField("name", e.target.value)
+                    }
                     className="workflow-name-header-input"
                     style={{
                       background: "transparent",
@@ -2137,7 +2970,7 @@ function App() {
                       padding: "2px 4px",
                       margin: 0,
                       outline: "none",
-                      width: "350px"
+                      width: "350px",
                     }}
                     placeholder="Nhập tên quy trình..."
                   />
@@ -2145,24 +2978,35 @@ function App() {
               ) : (
                 <h2>Thiết kế Quy trình</h2>
               )}
-              <p style={{ margin: "2px 0 0", opacity: 0.6, fontSize: "0.85rem" }}>
-                {loadedPath ? `Đường dẫn: ${loadedPath.replace(window.location.origin, "")}` : "Tệp cấu hình chưa lưu"}
+              <p
+                style={{ margin: "2px 0 0", opacity: 0.6, fontSize: "0.85rem" }}
+              >
+                {loadedPath
+                  ? `Đường dẫn: ${loadedPath.replace(window.location.origin, "")}`
+                  : "Tệp cấu hình chưa lưu"}
               </p>
             </div>
             <div className="actions">
-              <button onClick={toggleCompact} title="Chuyển sang giao diện Mini thu nhỏ">🗕 Giao diện Mini</button>
-              <button onClick={() => setWorkflowText(sampleJson)}>Reset Mẫu</button>
+              <button
+                onClick={toggleCompact}
+                title="Chuyển sang giao diện Mini thu nhỏ"
+              >
+                🗕 Giao diện Mini
+              </button>
+              <button onClick={() => setWorkflowText(sampleJson)}>
+                Reset Mẫu
+              </button>
               <button className="primary" onClick={handleSave}>
                 Lưu
               </button>
               {isRunning ? (
-                <button 
-                  className={`stop-btn ${isPaused ? "paused" : ""}`} 
-                  onClick={handleStop} 
-                  style={{ 
-                    backgroundColor: isPaused ? "#f59e0b" : "#dc3545", 
+                <button
+                  className={`stop-btn ${isPaused ? "paused" : ""}`}
+                  onClick={handleStop}
+                  style={{
+                    backgroundColor: isPaused ? "#f59e0b" : "#dc3545",
                     color: "#fff",
-                    transition: "all 0.3s ease"
+                    transition: "all 0.3s ease",
                   }}
                 >
                   {isPaused ? "⏸️ Tạm dừng (Dừng)" : "Dừng"}
@@ -2201,19 +3045,45 @@ function App() {
                 spellCheck={false}
               />
             ) : !workflow ? (
-              <div className="card panel" style={{ border: "1px dashed #ef4444", textAlign: "center", padding: "30px" }}>
-                <h3 style={{ color: "#ef4444", margin: "0 0 10px" }}>Cú pháp JSON bị lỗi</h3>
-                <p style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.9rem" }}>
-                  Bản dựng trực quan không thể hiển thị vì mã JSON hiện tại không hợp lệ.
+              <div
+                className="card panel"
+                style={{
+                  border: "1px dashed #ef4444",
+                  textAlign: "center",
+                  padding: "30px",
+                }}
+              >
+                <h3 style={{ color: "#ef4444", margin: "0 0 10px" }}>
+                  Cú pháp JSON bị lỗi
+                </h3>
+                <p
+                  style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.9rem" }}
+                >
+                  Bản dựng trực quan không thể hiển thị vì mã JSON hiện tại
+                  không hợp lệ.
                 </p>
-                <p style={{ color: "#ff9e9e", fontSize: "0.85rem", background: "rgba(0,0,0,0.2)", padding: "10px", borderRadius: "8px" }}>
+                <p
+                  style={{
+                    color: "#ff9e9e",
+                    fontSize: "0.85rem",
+                    background: "rgba(0,0,0,0.2)",
+                    padding: "10px",
+                    borderRadius: "8px",
+                  }}
+                >
                   {parsed.error}
                 </p>
                 <div style={{ marginTop: "20px" }}>
-                  <button onClick={() => setActiveTab("json")} style={{ marginRight: "10px" }}>
+                  <button
+                    onClick={() => setActiveTab("json")}
+                    style={{ marginRight: "10px" }}
+                  >
                     Sửa mã JSON
                   </button>
-                  <button className="accent" onClick={() => setWorkflowText(sampleJson)}>
+                  <button
+                    className="accent"
+                    onClick={() => setWorkflowText(sampleJson)}
+                  >
                     Reset về mẫu chuẩn
                   </button>
                 </div>
@@ -2224,20 +3094,30 @@ function App() {
                 <div className="form-section">
                   <h3 className="form-section-title">⚙️ Cấu hình chung</h3>
                   <div className="form-grid">
-                    <div className="form-group" style={{ gridColumn: "span 2" }}>
+                    <div
+                      className="form-group"
+                      style={{ gridColumn: "span 2" }}
+                    >
                       <label>Tên quy trình</label>
                       <input
                         type="text"
                         value={workflow.name}
-                        onChange={(e) => updateWorkflowField("name", e.target.value)}
+                        onChange={(e) =>
+                          updateWorkflowField("name", e.target.value)
+                        }
                         placeholder="Nhập tên quy trình"
                       />
                     </div>
-                    <div className="form-group" style={{ gridColumn: "span 2" }}>
+                    <div
+                      className="form-group"
+                      style={{ gridColumn: "span 2" }}
+                    >
                       <label>Mô tả quy trình</label>
                       <textarea
                         value={workflow.description ?? ""}
-                        onChange={(e) => updateWorkflowField("description", e.target.value)}
+                        onChange={(e) =>
+                          updateWorkflowField("description", e.target.value)
+                        }
                         placeholder="Nhập mô tả quy trình"
                         style={{ minHeight: "60px", resize: "vertical" }}
                       />
@@ -2250,7 +3130,12 @@ function App() {
                         min="0"
                         max="10"
                         value={workflow.settings.retryCount}
-                        onChange={(e) => updateSettings("retryCount", parseInt(e.target.value) || 0)}
+                        onChange={(e) =>
+                          updateSettings(
+                            "retryCount",
+                            parseInt(e.target.value) || 0,
+                          )
+                        }
                       />
                     </div>
                     <div className="form-group">
@@ -2260,7 +3145,12 @@ function App() {
                         min="0"
                         step="0.1"
                         value={workflow.settings.stepDelaySec ?? 0}
-                        onChange={(e) => updateSettings("stepDelaySec", parseFloat(e.target.value) || 0)}
+                        onChange={(e) =>
+                          updateSettings(
+                            "stepDelaySec",
+                            parseFloat(e.target.value) || 0,
+                          )
+                        }
                       />
                     </div>
                   </div>
@@ -2268,7 +3158,9 @@ function App() {
 
                 {/* Looping / Repeat settings */}
                 <div className="form-section">
-                  <h3 className="form-section-title">🔁 Lặp lại quy trình (Loop)</h3>
+                  <h3 className="form-section-title">
+                    🔁 Lặp lại quy trình (Loop)
+                  </h3>
                   <div className="form-group-checkbox">
                     <input
                       type="checkbox"
@@ -2276,16 +3168,23 @@ function App() {
                       checked={workflow.settings.repeat?.enabled ?? false}
                       onChange={(e) => {
                         const enabled = e.target.checked;
-                        const currentRepeat = workflow.settings.repeat || { enabled: false, times: 0, intervalMs: 1000 };
+                        const currentRepeat = workflow.settings.repeat || {
+                          enabled: false,
+                          times: 0,
+                          intervalMs: 1000,
+                        };
                         updateSettings("repeat", { ...currentRepeat, enabled });
                       }}
                     />
-                    <label htmlFor="repeat-enabled" style={{ fontSize: "1rem", fontWeight: "bold" }}>
+                    <label
+                      htmlFor="repeat-enabled"
+                      style={{ fontSize: "1rem", fontWeight: "bold" }}
+                    >
                       Chạy lặp lại liên tục quy trình này
                     </label>
                   </div>
 
-                  {(workflow.settings.repeat?.enabled) && (
+                  {workflow.settings.repeat?.enabled && (
                     <div className="form-grid" style={{ marginTop: "12px" }}>
                       <div className="form-group">
                         <label>Số lần lặp lại (Nhập 0 để lặp vô tận)</label>
@@ -2295,8 +3194,15 @@ function App() {
                           value={workflow.settings.repeat?.times ?? 0}
                           onChange={(e) => {
                             const times = parseInt(e.target.value) || 0;
-                            const currentRepeat = workflow.settings.repeat || { enabled: true, times: 0, intervalMs: 1000 };
-                            updateSettings("repeat", { ...currentRepeat, times });
+                            const currentRepeat = workflow.settings.repeat || {
+                              enabled: true,
+                              times: 0,
+                              intervalMs: 1000,
+                            };
+                            updateSettings("repeat", {
+                              ...currentRepeat,
+                              times,
+                            });
                           }}
                         />
                       </div>
@@ -2305,11 +3211,21 @@ function App() {
                         <input
                           type="number"
                           min="1"
-                          value={(workflow.settings.repeat?.intervalMs ?? 1000) / 1000}
+                          value={
+                            (workflow.settings.repeat?.intervalMs ?? 1000) /
+                            1000
+                          }
                           onChange={(e) => {
                             const sec = parseFloat(e.target.value) || 1;
-                            const currentRepeat = workflow.settings.repeat || { enabled: true, times: 0, intervalMs: 1000 };
-                            updateSettings("repeat", { ...currentRepeat, intervalMs: sec * 1000 });
+                            const currentRepeat = workflow.settings.repeat || {
+                              enabled: true,
+                              times: 0,
+                              intervalMs: 1000,
+                            };
+                            updateSettings("repeat", {
+                              ...currentRepeat,
+                              intervalMs: sec * 1000,
+                            });
                           }}
                         />
                       </div>
@@ -2319,15 +3235,19 @@ function App() {
 
                 {/* Global Telegram Alerts settings */}
                 <div className="form-section">
-                  <h3 className="form-section-title">📢 Báo cáo trạng thái qua Telegram</h3>
-                  
+                  <h3 className="form-section-title">
+                    📢 Báo cáo trạng thái qua Telegram
+                  </h3>
+
                   <div className="form-grid">
                     <div className="form-group">
                       <label>Tên máy này (deviceName)</label>
                       <input
                         type="text"
                         value={workflow.settings.deviceName || ""}
-                        onChange={(e) => updateSettings("deviceName", e.target.value)}
+                        onChange={(e) =>
+                          updateSettings("deviceName", e.target.value)
+                        }
                         placeholder="Ví dụ: máy 1"
                       />
                     </div>
@@ -2336,7 +3256,9 @@ function App() {
                       <input
                         type="text"
                         value={workflow.settings.telegramBotToken || ""}
-                        onChange={(e) => updateSettings("telegramBotToken", e.target.value)}
+                        onChange={(e) =>
+                          updateSettings("telegramBotToken", e.target.value)
+                        }
                         placeholder="Token của Bot nhận tin nhắn"
                       />
                     </div>
@@ -2345,41 +3267,74 @@ function App() {
                       <input
                         type="text"
                         value={workflow.settings.telegramChatId || ""}
-                        onChange={(e) => updateSettings("telegramChatId", e.target.value)}
+                        onChange={(e) =>
+                          updateSettings("telegramChatId", e.target.value)
+                        }
                         placeholder="ID cuộc trò chuyện hoặc group"
                       />
                     </div>
                   </div>
 
-                  <div className="form-grid" style={{ marginTop: "10px", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
+                  <div
+                    className="form-grid"
+                    style={{
+                      marginTop: "10px",
+                      gridTemplateColumns:
+                        "repeat(auto-fit, minmax(200px, 1fr))",
+                    }}
+                  >
                     <div className="form-group-checkbox">
                       <input
                         type="checkbox"
                         id="setting-report-startup"
                         checked={workflow.settings.reportStartup ?? false}
-                        onChange={(e) => updateSettings("reportStartup", e.target.checked)}
+                        onChange={(e) =>
+                          updateSettings("reportStartup", e.target.checked)
+                        }
                       />
-                      <label htmlFor="setting-report-startup" style={{ marginLeft: "6px" }}>Báo Telegram khi BẮT ĐẦU chạy tool</label>
+                      <label
+                        htmlFor="setting-report-startup"
+                        style={{ marginLeft: "6px" }}
+                      >
+                        Báo Telegram khi BẮT ĐẦU chạy tool
+                      </label>
                     </div>
                     <div className="form-group-checkbox">
                       <input
                         type="checkbox"
                         id="setting-report-error"
                         checked={workflow.settings.reportError ?? false}
-                        onChange={(e) => updateSettings("reportError", e.target.checked)}
+                        onChange={(e) =>
+                          updateSettings("reportError", e.target.checked)
+                        }
                       />
-                      <label htmlFor="setting-report-error" style={{ marginLeft: "6px" }}>Báo Telegram khi xảy ra LỖI trong quá trình chạy</label>
+                      <label
+                        htmlFor="setting-report-error"
+                        style={{ marginLeft: "6px" }}
+                      >
+                        Báo Telegram khi xảy ra LỖI trong quá trình chạy
+                      </label>
                     </div>
                   </div>
                 </div>
 
                 {/* Window Layout settings */}
                 <div className="form-section">
-                  <h3 className="form-section-title">🖥️ Cố định vị trí cửa sổ (Window Layout)</h3>
-                  <p style={{ fontSize: "0.82rem", color: "rgba(255,255,255,0.5)", margin: "0 0 10px 0" }}>
-                    Chụp lại vị trí và kích thước của các cửa sổ ứng dụng (trừ chính tool này) để khi chạy tool sẽ tự động khôi phục lại vị trí cũ, giúp click toạ độ chuẩn xác tuyệt đối.
+                  <h3 className="form-section-title">
+                    🖥️ Cố định vị trí cửa sổ (Window Layout)
+                  </h3>
+                  <p
+                    style={{
+                      fontSize: "0.82rem",
+                      color: "rgba(255,255,255,0.5)",
+                      margin: "0 0 10px 0",
+                    }}
+                  >
+                    Chụp lại vị trí và kích thước của các cửa sổ ứng dụng (trừ
+                    chính tool này) để khi chạy tool sẽ tự động khôi phục lại vị
+                    trí cũ, giúp click toạ độ chuẩn xác tuyệt đối.
                   </p>
-                  
+
                   <div style={{ marginBottom: "12px" }}>
                     <button
                       type="button"
@@ -2387,44 +3342,89 @@ function App() {
                         if (desktopApi.captureWindowLayout) {
                           setStatus("Đang quét các cửa sổ...");
                           try {
-                            const layout = await desktopApi.captureWindowLayout();
+                            const layout =
+                              await desktopApi.captureWindowLayout();
                             updateSettings("windowLayout", layout);
-                            setStatus(`Đã lưu bố cục của ${layout.length} cửa sổ`);
-                            setLogs((current) => [`Đã chụp bố cục cửa sổ hiện tại (${layout.length} cửa sổ).`, ...current]);
+                            setStatus(
+                              `Đã lưu bố cục của ${layout.length} cửa sổ`,
+                            );
+                            setLogs((current) => [
+                              `Đã chụp bố cục cửa sổ hiện tại (${layout.length} cửa sổ).`,
+                              ...current,
+                            ]);
                           } catch (err) {
                             console.error("Lỗi khi chụp bố cục cửa sổ:", err);
                             setStatus("Lỗi khi chụp bố cục cửa sổ.");
                           }
                         }
                       }}
-                      style={{ background: "rgba(20, 184, 166, 0.15)", borderColor: "#14b8a6", color: "#14b8a6" }}
+                      style={{
+                        background: "rgba(20, 184, 166, 0.15)",
+                        borderColor: "#14b8a6",
+                        color: "#14b8a6",
+                      }}
                     >
                       📷 Chụp & Lưu Vị Trí Cửa Sổ Hiện Tại
                     </button>
                   </div>
 
-                  {workflow.settings.windowLayout && workflow.settings.windowLayout.length > 0 ? (
-                    <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: "8px", padding: "10px", border: "1px solid rgba(255,255,255,0.05)", overflowX: "auto" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
+                  {workflow.settings.windowLayout &&
+                  workflow.settings.windowLayout.length > 0 ? (
+                    <div
+                      style={{
+                        background: "rgba(0,0,0,0.2)",
+                        borderRadius: "8px",
+                        padding: "10px",
+                        border: "1px solid rgba(255,255,255,0.05)",
+                        overflowX: "auto",
+                      }}
+                    >
+                      <table
+                        style={{
+                          width: "100%",
+                          borderCollapse: "collapse",
+                          fontSize: "0.82rem",
+                        }}
+                      >
                         <thead>
-                          <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.1)", textAlign: "left" }}>
+                          <tr
+                            style={{
+                              borderBottom: "1px solid rgba(255,255,255,0.1)",
+                              textAlign: "left",
+                            }}
+                          >
                             <th style={{ padding: "6px" }}>Bật</th>
-                            <th style={{ padding: "6px" }}>Tên Cửa Sổ (Title)</th>
+                            <th style={{ padding: "6px" }}>
+                              Tên Cửa Sổ (Title)
+                            </th>
                             <th style={{ padding: "6px" }}>Toạ độ (X, Y)</th>
-                            <th style={{ padding: "6px" }}>Kích thước (W x H)</th>
+                            <th style={{ padding: "6px" }}>
+                              Kích thước (W x H)
+                            </th>
                             <th style={{ padding: "6px" }}>Hành động</th>
                           </tr>
                         </thead>
                         <tbody>
                           {workflow.settings.windowLayout.map((win, idx) => (
-                            <tr key={idx} style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+                            <tr
+                              key={idx}
+                              style={{
+                                borderBottom:
+                                  "1px solid rgba(255,255,255,0.03)",
+                              }}
+                            >
                               <td style={{ padding: "6px" }}>
                                 <input
                                   type="checkbox"
                                   checked={win.enabled}
                                   onChange={(e) => {
-                                    const nextLayout = [...(workflow.settings.windowLayout || [])];
-                                    nextLayout[idx] = { ...win, enabled: e.target.checked };
+                                    const nextLayout = [
+                                      ...(workflow.settings.windowLayout || []),
+                                    ];
+                                    nextLayout[idx] = {
+                                      ...win,
+                                      enabled: e.target.checked,
+                                    };
                                     updateSettings("windowLayout", nextLayout);
                                   }}
                                   style={{ cursor: "pointer" }}
@@ -2435,35 +3435,65 @@ function App() {
                                   type="text"
                                   value={win.title}
                                   onChange={(e) => {
-                                    const nextLayout = [...(workflow.settings.windowLayout || [])];
-                                    nextLayout[idx] = { ...win, title: e.target.value };
+                                    const nextLayout = [
+                                      ...(workflow.settings.windowLayout || []),
+                                    ];
+                                    nextLayout[idx] = {
+                                      ...win,
+                                      title: e.target.value,
+                                    };
                                     updateSettings("windowLayout", nextLayout);
                                   }}
                                   style={{
                                     background: "transparent",
                                     border: "none",
-                                    borderBottom: "1px dashed rgba(255,255,255,0.2)",
-                                    color: win.enabled ? "#fff" : "rgba(255,255,255,0.4)",
+                                    borderBottom:
+                                      "1px dashed rgba(255,255,255,0.2)",
+                                    color: win.enabled
+                                      ? "#fff"
+                                      : "rgba(255,255,255,0.4)",
                                     fontSize: "0.82rem",
                                     width: "100%",
-                                    padding: "2px"
+                                    padding: "2px",
                                   }}
                                 />
                               </td>
-                              <td style={{ padding: "6px", color: win.enabled ? "#14b8a6" : "rgba(255,255,255,0.4)" }}>
+                              <td
+                                style={{
+                                  padding: "6px",
+                                  color: win.enabled
+                                    ? "#14b8a6"
+                                    : "rgba(255,255,255,0.4)",
+                                }}
+                              >
                                 {win.x}, {win.y}
                               </td>
-                              <td style={{ padding: "6px", color: win.enabled ? "#14b8a6" : "rgba(255,255,255,0.4)" }}>
+                              <td
+                                style={{
+                                  padding: "6px",
+                                  color: win.enabled
+                                    ? "#14b8a6"
+                                    : "rgba(255,255,255,0.4)",
+                                }}
+                              >
                                 {win.width} x {win.height}
                               </td>
                               <td style={{ padding: "6px" }}>
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    const nextLayout = (workflow.settings.windowLayout || []).filter((_, i) => i !== idx);
+                                    const nextLayout = (
+                                      workflow.settings.windowLayout || []
+                                    ).filter((_, i) => i !== idx);
                                     updateSettings("windowLayout", nextLayout);
                                   }}
-                                  style={{ background: "transparent", border: "none", color: "#ef4444", padding: "0 4px", fontSize: "0.8rem" }}
+                                  style={{
+                                    background: "transparent",
+                                    border: "none",
+                                    color: "#ef4444",
+                                    padding: "0 4px",
+                                    fontSize: "0.8rem",
+                                  }}
                                 >
                                   Xoá
                                 </button>
@@ -2474,7 +3504,17 @@ function App() {
                       </table>
                     </div>
                   ) : (
-                    <div style={{ fontStyle: "italic", color: "rgba(255,255,255,0.3)", fontSize: "0.8rem", textAlign: "center", padding: "10px", border: "1px dashed rgba(255,255,255,0.1)", borderRadius: "8px" }}>
+                    <div
+                      style={{
+                        fontStyle: "italic",
+                        color: "rgba(255,255,255,0.3)",
+                        fontSize: "0.8rem",
+                        textAlign: "center",
+                        padding: "10px",
+                        border: "1px dashed rgba(255,255,255,0.1)",
+                        borderRadius: "8px",
+                      }}
+                    >
                       Chưa lưu bố cục cửa sổ nào.
                     </div>
                   )}
@@ -2482,7 +3522,9 @@ function App() {
 
                 {/* Steps Section */}
                 <div>
-                  <h3 className="form-section-title">🛠️ Danh sách các bước thực hiện</h3>
+                  <h3 className="form-section-title">
+                    🛠️ Danh sách các bước thực hiện
+                  </h3>
                   <div className="steps-container">
                     {workflow.startSteps.map((step, idx) => (
                       <StepCard
@@ -2502,51 +3544,127 @@ function App() {
 
                     {/* Step list is empty */}
                     {workflow.startSteps.length === 0 && (
-                      <div style={{ textAlign: "center", padding: "20px", color: "rgba(255,255,255,0.4)", border: "1px dashed rgba(255,255,255,0.1)", borderRadius: "12px" }}>
-                        Chưa có hành động nào. Vui lòng chọn một hành động bên dưới để thêm.
+                      <div
+                        style={{
+                          textAlign: "center",
+                          padding: "20px",
+                          color: "rgba(255,255,255,0.4)",
+                          border: "1px dashed rgba(255,255,255,0.1)",
+                          borderRadius: "12px",
+                        }}
+                      >
+                        Chưa có hành động nào. Vui lòng chọn một hành động bên
+                        dưới để thêm.
                       </div>
                     )}
 
                     {/* Add action selectors */}
                     <div className="step-card-add-actions">
-                      <button type="button" onClick={() => handleAddStep("launch_app")}>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("launch_app")}
+                      >
                         + Mở ứng dụng
                       </button>
-                      <button type="button" onClick={() => handleAddStep("wait")}>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("wait")}
+                      >
                         + Chờ thời gian
                       </button>
-                      <button type="button" onClick={() => handleAddStep("click")}>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("click")}
+                      >
                         + Click chuột
                       </button>
-                      <button type="button" onClick={() => handleAddStep("double_click")}>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("double_click")}
+                      >
                         + Double click
                       </button>
 
-                      <button type="button" onClick={() => handleAddStep("wait_for_image")}>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("wait_for_image")}
+                      >
                         + Đợi ảnh mẫu
                       </button>
-                      <button type="button" onClick={() => handleAddStep("check_text")}>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("check_text")}
+                      >
                         + Kiểm tra chữ
                       </button>
-                      <button type="button" onClick={() => handleAddStep("conditional")} style={{ background: "rgba(233, 30, 99, 0.15)", borderColor: "rgba(233, 30, 99, 0.3)" }}>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("conditional")}
+                        style={{
+                          background: "rgba(233, 30, 99, 0.15)",
+                          borderColor: "rgba(233, 30, 99, 0.3)",
+                        }}
+                      >
                         + Kiểm tra (IF)
                       </button>
-                      <button type="button" onClick={() => handleAddStep("run_workflow")} style={{ background: "rgba(168, 85, 247, 0.15)", borderColor: "rgba(168, 85, 247, 0.3)" }}>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("run_workflow")}
+                        style={{
+                          background: "rgba(168, 85, 247, 0.15)",
+                          borderColor: "rgba(168, 85, 247, 0.3)",
+                        }}
+                      >
                         + Chạy Flow Con
                       </button>
-                      <button type="button" onClick={() => handleAddStep("conditional_workflow")} style={{ background: "rgba(219, 39, 119, 0.15)", borderColor: "rgba(219, 39, 119, 0.3)" }}>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("conditional_workflow")}
+                        style={{
+                          background: "rgba(219, 39, 119, 0.15)",
+                          borderColor: "rgba(219, 39, 119, 0.3)",
+                        }}
+                      >
                         + Rẽ Nhánh Flow
                       </button>
-                      <button type="button" onClick={() => handleAddStep("check_interval")} style={{ background: "rgba(6, 182, 212, 0.15)", borderColor: "rgba(6, 182, 212, 0.3)" }}>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("check_interval")}
+                        style={{
+                          background: "rgba(6, 182, 212, 0.15)",
+                          borderColor: "rgba(6, 182, 212, 0.3)",
+                        }}
+                      >
                         + Lặp Chu Kỳ
                       </button>
-                      <button type="button" onClick={() => handleAddStep("clear_interval")} style={{ background: "rgba(239, 68, 68, 0.15)", borderColor: "rgba(239, 68, 68, 0.3)" }}>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("clear_interval")}
+                        style={{
+                          background: "rgba(239, 68, 68, 0.15)",
+                          borderColor: "rgba(239, 68, 68, 0.3)",
+                        }}
+                      >
                         + Dừng Chu Kỳ
                       </button>
-                      <button type="button" onClick={() => handleAddStep("press_key")} style={{ background: "rgba(249, 115, 22, 0.15)", borderColor: "rgba(249, 115, 22, 0.3)" }}>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("press_key")}
+                        style={{
+                          background: "rgba(249, 115, 22, 0.15)",
+                          borderColor: "rgba(249, 115, 22, 0.3)",
+                        }}
+                      >
                         + Nhấn Phím
                       </button>
-                      <button type="button" onClick={() => handleAddStep("send_telegram")} style={{ background: "rgba(16, 185, 129, 0.15)", borderColor: "rgba(16, 185, 129, 0.3)" }}>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("send_telegram")}
+                        style={{
+                          background: "rgba(16, 185, 129, 0.15)",
+                          borderColor: "rgba(16, 185, 129, 0.3)",
+                        }}
+                      >
                         + Gửi Telegram
                       </button>
                     </div>
@@ -2588,24 +3706,36 @@ function App() {
                         <strong>Lặp lại</strong>
                         <span>
                           {parsed.value.settings.repeat?.enabled
-                            ? `Lặp ${parsed.value.settings.repeat.times === 0 ? "vô hạn" : `${parsed.value.settings.repeat.times} lần`} (Nghỉ ${(parsed.value.settings.repeat.intervalMs / 1000)}s)`
+                            ? `Lặp ${parsed.value.settings.repeat.times === 0 ? "vô hạn" : `${parsed.value.settings.repeat.times} lần`} (Nghỉ ${parsed.value.settings.repeat.intervalMs / 1000}s)`
                             : "Tắt lặp"}
                         </span>
                       </div>
                     </div>
-                    <div style={{ fontWeight: "bold", margin: "14px 0 8px", fontSize: "0.9rem" }}>
+                    <div
+                      style={{
+                        fontWeight: "bold",
+                        margin: "14px 0 8px",
+                        fontSize: "0.9rem",
+                      }}
+                    >
                       Trình tự ({parsed.value.startSteps.length} bước):
                     </div>
                     <ul className="stepList">
                       {parsed.value.startSteps.map((step, index) => {
-                        const isStepCoord = 
-                          (step.type === "click" && (!step.clickType || step.clickType === "coordinate")) ||
-                          (step.type === "double_click" && (!step.clickType || step.clickType === "coordinate")) ||
-                          (step.type === "conditional" && (step.actionType === "click" || step.actionType === "double_click"));
-                        
+                        const isStepCoord =
+                          (step.type === "click" &&
+                            (!step.clickType ||
+                              step.clickType === "coordinate")) ||
+                          (step.type === "double_click" &&
+                            (!step.clickType ||
+                              step.clickType === "coordinate")) ||
+                          (step.type === "conditional" &&
+                            (step.actionType === "click" ||
+                              step.actionType === "double_click"));
+
                         const isCurrent = index === currentStepIdx;
                         const isFailed = index === failedStepIdx;
-                        
+
                         let liClass = "";
                         if (isCurrent) liClass = "step-running";
                         else if (isFailed) liClass = "step-failed";
@@ -2613,83 +3743,150 @@ function App() {
 
                         return (
                           <li key={`${step.type}-${index}`} className={liClass}>
-                            <span 
+                            <span
                               className="stepIndex"
                               style={{
-                                background: isFailed ? "#ef4444" : isCurrent ? "#14b8a6" : undefined,
-                                color: isFailed || isCurrent ? "#080908" : undefined
+                                background: isFailed
+                                  ? "#ef4444"
+                                  : isCurrent
+                                    ? "#14b8a6"
+                                    : undefined,
+                                color:
+                                  isFailed || isCurrent ? "#080908" : undefined,
                               }}
                             >
                               {String(index + 1).padStart(2, "0")}
                             </span>
                             <div>
-                              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "6px" }}>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  flexWrap: "wrap",
+                                  gap: "6px",
+                                }}
+                              >
                                 <strong>{step.name}</strong>
                                 {isCurrent && (
-                                  <span style={{ color: "#14b8a6", fontSize: "0.75rem", fontWeight: "bold", display: "inline-flex", alignItems: "center", gap: "4px" }}>
-                                    <span className="step-spinner" style={{ margin: 0 }} /> Đang chạy...
+                                  <span
+                                    style={{
+                                      color: "#14b8a6",
+                                      fontSize: "0.75rem",
+                                      fontWeight: "bold",
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "4px",
+                                    }}
+                                  >
+                                    <span
+                                      className="step-spinner"
+                                      style={{ margin: 0 }}
+                                    />{" "}
+                                    Đang chạy...
                                   </span>
                                 )}
                                 {isStepCoord && (
-                                  <span style={{ color: "#f59e0b", fontSize: "0.78rem", fontWeight: "bold" }}>
+                                  <span
+                                    style={{
+                                      color: "#f59e0b",
+                                      fontSize: "0.78rem",
+                                      fontWeight: "bold",
+                                    }}
+                                  >
                                     ⚠️ Cần sửa
                                   </span>
                                 )}
                               </div>
-                              <p style={{ textTransform: "capitalize", fontSize: "0.82rem", margin: "2px 0 0", opacity: 0.7 }}>
+                              <p
+                                style={{
+                                  textTransform: "capitalize",
+                                  fontSize: "0.82rem",
+                                  margin: "2px 0 0",
+                                  opacity: 0.7,
+                                }}
+                              >
                                 {step.type === "launch_app" && "Chạy App"}
-                                {step.type === "wait" && `Chờ ${(step.ms / 1000)}s`}
-                                {step.type === "click" && `Click (${(step.clickType || "coordinate") === "coordinate" ? `Toạ độ ${step.x},${step.y}` : (step.clickType === "text" ? `Chữ: "${step.text}"` : "Khớp hình ảnh")})`}
-                                {step.type === "double_click" && `Double Click (${(step.clickType || "coordinate") === "coordinate" ? `Toạ độ ${step.x},${step.y}` : (step.clickType === "text" ? `Chữ: "${step.text}"` : "Khớp hình ảnh")})`}
-                                {step.type === "wait_for_image" && "Đợi hình ảnh"}
-                                {step.type === "check_text" && `Kiểm tra chữ: "${step.text}"`}
-                                {step.type === "conditional" && `Kiểm tra: Nếu thấy ${step.conditionType === "image" ? "ảnh" : `chữ "${step.text}"`} thì ${step.actionType}`}
-                                {step.type === "run_workflow" && `Chạy Flow Con: ${step.workflowPath ? (step.workflowPath.split(/[/\\]/).pop() || step.workflowPath) : "(Chưa chọn)"}`}
-                                {step.type === "conditional_workflow" && `Rẽ Nhánh Flow: Nếu thấy ${step.conditionType === "image" ? "ảnh" : `chữ "${step.text}"`} thì chạy Flow Con`}
-                                {step.type === "check_interval" && `Lặp Chu Kỳ: Chạy mỗi ${step.intervalSec}s cho đến khi dừng`}
-                                {step.type === "clear_interval" && `Dừng Chu Kỳ: ${step.intervalId || "(Chưa nhập ID)"}`}
-                                {step.type === "press_key" && `Nhấn phím: ${step.key.toUpperCase()}`}
+                                {step.type === "wait" &&
+                                  `Chờ ${step.ms / 1000}s`}
+                                {step.type === "click" &&
+                                  `Click (${(step.clickType || "coordinate") === "coordinate" ? `Toạ độ ${step.x},${step.y}` : step.clickType === "text" ? `Chữ: "${step.text}"` : "Khớp hình ảnh"})`}
+                                {step.type === "double_click" &&
+                                  `Double Click (${(step.clickType || "coordinate") === "coordinate" ? `Toạ độ ${step.x},${step.y}` : step.clickType === "text" ? `Chữ: "${step.text}"` : "Khớp hình ảnh"})`}
+                                {step.type === "wait_for_image" &&
+                                  "Đợi hình ảnh"}
+                                {step.type === "check_text" &&
+                                  `Kiểm tra chữ: "${step.text}"`}
+                                {step.type === "conditional" &&
+                                  `Kiểm tra: Nếu thấy ${step.conditionType === "image" ? "ảnh" : `chữ "${step.text}"`} thì ${step.actionType}`}
+                                {step.type === "run_workflow" &&
+                                  `Chạy Flow Con: ${step.workflowPath ? step.workflowPath.split(/[/\\]/).pop() || step.workflowPath : "(Chưa chọn)"}`}
+                                {step.type === "conditional_workflow" &&
+                                  `Rẽ Nhánh Flow: Nếu thấy ${step.conditionType === "image" ? "ảnh" : `chữ "${step.text}"`} thì chạy Flow Con`}
+                                {step.type === "check_interval" &&
+                                  `Lặp Chu Kỳ: Chạy mỗi ${step.intervalSec}s cho đến khi dừng`}
+                                {step.type === "clear_interval" &&
+                                  `Dừng Chu Kỳ: ${step.intervalId || "(Chưa nhập ID)"}`}
+                                {step.type === "press_key" &&
+                                  `Nhấn phím: ${step.key.toUpperCase()}`}
                               </p>
                               {isFailed && (
-                                <div style={{ 
-                                  marginTop: "8px", 
-                                  padding: "8px 10px", 
-                                  background: "rgba(239, 68, 68, 0.15)", 
-                                  border: "1px solid rgba(239, 68, 68, 0.3)", 
-                                  borderRadius: "8px", 
-                                  color: "#f87171", 
-                                  fontSize: "0.8rem",
-                                  wordBreak: "break-word"
-                                }}>
+                                <div
+                                  style={{
+                                    marginTop: "8px",
+                                    padding: "8px 10px",
+                                    background: "rgba(239, 68, 68, 0.15)",
+                                    border: "1px solid rgba(239, 68, 68, 0.3)",
+                                    borderRadius: "8px",
+                                    color: "#f87171",
+                                    fontSize: "0.8rem",
+                                    wordBreak: "break-word",
+                                  }}
+                                >
                                   <div style={{ fontWeight: "bold" }}>
-                                    ❌ Lỗi: {stepErrors[index] || "Bước này gặp sự cố."}
+                                    ❌ Lỗi:{" "}
+                                    {stepErrors[index] || "Bước này gặp sự cố."}
                                   </div>
                                   {debugOcrImage && (
                                     <div style={{ marginTop: "8px" }}>
-                                      <div style={{ fontSize: "0.75rem", opacity: 0.8, marginBottom: "4px" }}>
+                                      <div
+                                        style={{
+                                          fontSize: "0.75rem",
+                                          opacity: 0.8,
+                                          marginBottom: "4px",
+                                        }}
+                                      >
                                         📷 Ảnh chụp vùng quét OCR:
                                       </div>
-                                      <img 
-                                        src={debugOcrImage} 
-                                        alt="OCR Debug Region" 
-                                        style={{ 
-                                          maxWidth: "100%", 
-                                          maxHeight: "150px", 
-                                          objectFit: "contain", 
+                                      <img
+                                        src={debugOcrImage}
+                                        alt="OCR Debug Region"
+                                        style={{
+                                          maxWidth: "100%",
+                                          maxHeight: "150px",
+                                          objectFit: "contain",
                                           borderRadius: "6px",
-                                          border: "1px solid rgba(255,255,255,0.1)",
-                                          background: "#000"
-                                        }} 
+                                          border:
+                                            "1px solid rgba(255,255,255,0.1)",
+                                          background: "#000",
+                                        }}
                                       />
                                     </div>
                                   )}
                                 </div>
                               )}
                             </div>
-                        </li>
-                      )})}
+                          </li>
+                        );
+                      })}
                       {parsed.value.startSteps.length === 0 && (
-                        <p style={{ color: "rgba(255,255,255,0.4)", fontSize: "0.85rem" }}>Chưa có hành động nào.</p>
+                        <p
+                          style={{
+                            color: "rgba(255,255,255,0.4)",
+                            fontSize: "0.85rem",
+                          }}
+                        >
+                          Chưa có hành động nào.
+                        </p>
                       )}
                     </ul>
                   </>
@@ -2711,7 +3908,9 @@ function App() {
       {/* Bottom Status bar */}
       <footer className="status-bar">
         <span className="status-text">👉 Trạng thái: {status}</span>
-        <span className={`validity-indicator ${parsed.ok ? "valid" : "invalid"}`}>
+        <span
+          className={`validity-indicator ${parsed.ok ? "valid" : "invalid"}`}
+        >
           {parsed.ok ? "🟢 Cấu hình hợp lệ" : `🔴 Lỗi: ${parsed.error}`}
         </span>
       </footer>

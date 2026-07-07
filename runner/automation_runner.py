@@ -300,34 +300,41 @@ def log(message: str) -> None:
     print(f"[{datetime.now().isoformat(timespec='seconds')}] {message}", flush=True)
 
 
-def get_dpi_scale() -> float:
+_actual_scale = None
+
+def get_actual_scale() -> float:
+    global _actual_scale
+    if _actual_scale is not None:
+        return _actual_scale
     if sys.platform != "win32":
-        return 1.0
+        _actual_scale = 1.0
+        return _actual_scale
     try:
-        import ctypes
-        hdc = ctypes.windll.user32.GetDC(0)
-        logical_w = ctypes.windll.gdi32.GetDeviceCaps(hdc, 8)      # HORZRES
-        physical_w = ctypes.windll.gdi32.GetDeviceCaps(hdc, 118)   # DESKTOPHORZRES
-        ctypes.windll.user32.ReleaseDC(0, hdc)
-        if logical_w > 0:
-            return physical_w / logical_w
-    except Exception:
-        pass
-    return 1.0
+        import pyautogui
+        from PIL import ImageGrab
+        logical_w, _ = pyautogui.size()
+        # Grab primary screen only to calculate standard scale factor
+        full_img = ImageGrab.grab(all_screens=False)
+        captured_w, _ = full_img.size
+        _actual_scale = captured_w / logical_w
+        log(f"Dynamic DPI scaling calculated: {captured_w} (Pillow) / {logical_w} (PyAutoGUI) = {_actual_scale}")
+        return _actual_scale
+    except Exception as err:
+        log(f"Error calculating dynamic DPI scale: {err}")
+        return 1.0
 
 
 def take_screenshot(region=None) -> Any:
-    import pyautogui
-    scale = get_dpi_scale()
-    if region and scale != 1.0:
+    from PIL import ImageGrab
+    if region:
         scaled_region = (
-            int(region[0] * scale),
-            int(region[1] * scale),
-            int(region[2] * scale),
-            int(region[3] * scale),
+            int(region[0]),
+            int(region[1]),
+            int(region[0] + region[2]),
+            int(region[1] + region[3]),
         )
-        return pyautogui.screenshot(region=scaled_region)
-    return pyautogui.screenshot(region=tuple(region) if region else None)
+        return ImageGrab.grab(bbox=scaled_region, all_screens=True)
+    return ImageGrab.grab(all_screens=True)
 
 
 def normalize_text(value: str) -> str:
@@ -364,7 +371,6 @@ def extract_text_from_screen(
         import pytesseract  # type: ignore
     except ImportError as error:
         raise RuntimeError("pytesseract and pyautogui are required for OCR checks.") from error
-
     screenshot = take_screenshot(region)
     try:
         screenshot.save("debug_ocr_region.png")
@@ -458,20 +464,20 @@ def safe_locate_on_screen(
     region: list[int] | None = None,
 ) -> tuple[Any | None, str | None]:
     try:
-        scale = get_dpi_scale()
-        scaled_region = None
-        if region and scale != 1.0:
-            scaled_region = (
-                int(region[0] * scale),
-                int(region[1] * scale),
-                int(region[2] * scale),
-                int(region[3] * scale),
-            )
-        match = pyautogui.locateOnScreen(
-            image,
-            confidence=confidence,
-            region=scaled_region if scaled_region else (tuple(region) if region else None),
-        )
+        screenshot = take_screenshot(region)
+        match = pyautogui.locate(image, screenshot, confidence=confidence)
+        
+        if match and region:
+            try:
+                from pyautogui import Box
+            except ImportError:
+                from collections import namedtuple
+                Box = namedtuple('Box', 'left top width height')
+            
+            left = match[0] + int(region[0])
+            top = match[1] + int(region[1])
+            return Box(left, top, match[2], match[3]), None
+            
         return match, None
     except Exception as error:
         error_name = type(error).__name__
@@ -777,7 +783,7 @@ def step_click(step: dict[str, Any], dry_run: bool) -> None:
                     last_locate_error = locate_error
                 if match:
                     center_point = pyautogui.center(match)
-                    scale = get_dpi_scale()
+                    scale = get_actual_scale()
                     click_x = center_point.x / scale
                     click_y = center_point.y / scale
                     
@@ -834,18 +840,17 @@ def step_click(step: dict[str, Any], dry_run: bool) -> None:
                 
                 match_box = locate_text_in_image(screenshot, text_val)
                 if match_box:
-                    scale = get_dpi_scale()
                     left, top, width, height = match_box
-                    left_log = left / scale
-                    top_log = top / scale
-                    width_log = width / scale
-                    height_log = height / scale
                     
                     offset_x = region[0] if region else 0
                     offset_y = region[1] if region else 0
                     
-                    center_x = int(offset_x + left_log + width_log / 2)
-                    center_y = int(offset_y + top_log + height_log / 2)
+                    center_x_phys = offset_x + left + width / 2
+                    center_y_phys = offset_y + top + height / 2
+                    
+                    scale = get_actual_scale()
+                    center_x = int(center_x_phys / scale)
+                    center_y = int(center_y_phys / scale)
                     
                     highlight_coordinate(center_x, center_y)
                     
@@ -869,10 +874,13 @@ def step_click(step: dict[str, Any], dry_run: bool) -> None:
             if not found:
                 raise TimeoutError(f"Text for clicking not found within timeout: '{text_val}'")
     else:
-        x = step.get("x")
-        y = step.get("y")
-        if x is None or y is None:
+        x_phys = step.get("x")
+        y_phys = step.get("y")
+        if x_phys is None or y_phys is None:
             raise ValueError("Coordinates x and y are required for click by coordinate.")
+        scale = get_actual_scale()
+        x = x_phys / scale
+        y = y_phys / scale
         if dry_run:
             log(f"DRY RUN click at ({x}, {y})")
         else:
@@ -941,7 +949,7 @@ def step_double_click(step: dict[str, Any], dry_run: bool) -> None:
                     last_locate_error = locate_error
                 if match:
                     center_point = pyautogui.center(match)
-                    scale = get_dpi_scale()
+                    scale = get_actual_scale()
                     click_x = center_point.x / scale
                     click_y = center_point.y / scale
                     
@@ -998,18 +1006,17 @@ def step_double_click(step: dict[str, Any], dry_run: bool) -> None:
                 
                 match_box = locate_text_in_image(screenshot, text_val)
                 if match_box:
-                    scale = get_dpi_scale()
                     left, top, width, height = match_box
-                    left_log = left / scale
-                    top_log = top / scale
-                    width_log = width / scale
-                    height_log = height / scale
                     
                     offset_x = region[0] if region else 0
                     offset_y = region[1] if region else 0
                     
-                    center_x = int(offset_x + left_log + width_log / 2)
-                    center_y = int(offset_y + top_log + height_log / 2)
+                    center_x_phys = offset_x + left + width / 2
+                    center_y_phys = offset_y + top + height / 2
+                    
+                    scale = get_actual_scale()
+                    center_x = int(center_x_phys / scale)
+                    center_y = int(center_y_phys / scale)
                     
                     highlight_coordinate(center_x, center_y)
                     
@@ -1033,10 +1040,13 @@ def step_double_click(step: dict[str, Any], dry_run: bool) -> None:
             if not found:
                 raise TimeoutError(f"Text for double clicking not found within timeout: '{text_val}'")
     else:
-        x = step.get("x")
-        y = step.get("y")
-        if x is None or y is None:
+        x_phys = step.get("x")
+        y_phys = step.get("y")
+        if x_phys is None or y_phys is None:
             raise ValueError("Coordinates x and y are required for double click by coordinate.")
+        scale = get_actual_scale()
+        x = x_phys / scale
+        y = y_phys / scale
         if dry_run:
             log(f"DRY RUN double click at ({x}, {y})")
         else:
@@ -1132,6 +1142,7 @@ def step_check_text(step: dict[str, Any], dry_run: bool) -> None:
             log("Check text interrupted by abort request.")
             return
         check_pause_and_wait()
+        log(f"Region: {region}")
         extracted = extract_text_from_screen(
             region=region,
             lang=lang,

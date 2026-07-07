@@ -58,6 +58,21 @@ function resolveRunnerCommand() {
 
 function ensureWorkflowDir() {
   fs.mkdirSync(workflowDir, { recursive: true });
+
+  const projectWorkflowsDir = path.join(getProjectRoot(), "workflows");
+  if (fs.existsSync(projectWorkflowsDir)) {
+    try {
+      const files = fs.readdirSync(projectWorkflowsDir).filter((file) => file.endsWith(".json"));
+      for (const file of files) {
+        const destPath = path.join(workflowDir, file);
+        if (!fs.existsSync(destPath)) {
+          fs.copyFileSync(path.join(projectWorkflowsDir, file), destPath);
+        }
+      }
+    } catch (err) {
+      console.error("Error copying default workflows:", err);
+    }
+  }
 }
 
 function createWindow() {
@@ -81,20 +96,15 @@ function createWindow() {
   }
 }
 
+ipcMain.handle("workflow:get-dir", async () => {
+  ensureWorkflowDir();
+  return workflowDir;
+});
+
 ipcMain.handle("workflow:list", async () => {
   ensureWorkflowDir();
   const files = fs.readdirSync(workflowDir).filter((file) => file.endsWith(".json"));
-  const userDataList = files.map((file) => path.join(workflowDir, file));
-
-  const projectWorkflowsDir = path.join(getProjectRoot(), "workflows");
-  let projectList = [];
-  if (fs.existsSync(projectWorkflowsDir)) {
-    const projectFiles = fs.readdirSync(projectWorkflowsDir).filter((file) => file.endsWith(".json"));
-    projectList = projectFiles.map((file) => path.join(projectWorkflowsDir, file));
-  }
-
-  const combined = [...userDataList, ...projectList];
-  return Array.from(new Set(combined));
+  return files.map((file) => path.join(workflowDir, file));
 });
 
 ipcMain.handle("workflow:load", async (_event, filePath) => {
@@ -103,7 +113,7 @@ ipcMain.handle("workflow:load", async (_event, filePath) => {
 
 ipcMain.handle("workflow:save", async (_event, payload) => {
   let target;
-  if (payload.filePath && path.isAbsolute(payload.filePath)) {
+  if (payload.filePath && path.isAbsolute(payload.filePath) && !payload.filePath.includes("app.asar")) {
     target = payload.filePath;
   } else {
     ensureWorkflowDir();
@@ -175,7 +185,12 @@ ipcMain.handle("image:read-debug-ocr", async () => {
 ipcMain.handle("mouse:capture-position", async () => {
   try {
     const point = screen.getCursorScreenPoint();
-    return { x: point.x, y: point.y };
+    const targetDisplay = screen.getDisplayNearestPoint(point) || screen.getPrimaryDisplay();
+    const scaleFactor = targetDisplay.scaleFactor || 1;
+    return {
+      x: Math.round(point.x * scaleFactor),
+      y: Math.round(point.y * scaleFactor)
+    };
   } catch (error) {
     console.error("Error capturing mouse position:", error);
     return null;
@@ -250,9 +265,11 @@ ipcMain.handle("screen:capture-region", async () => {
           cropWin.close();
         }
         safeResolve({
-          ...result,
-          x: result.x + displayX,
-          y: result.y + displayY
+          x: Math.round((result.x + displayX) * scaleFactor),
+          y: Math.round((result.y + displayY) * scaleFactor),
+          width: Math.round(result.width * scaleFactor),
+          height: Math.round(result.height * scaleFactor),
+          base64: result.base64
         });
       });
 
