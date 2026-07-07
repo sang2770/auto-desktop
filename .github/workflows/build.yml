@@ -34,7 +34,7 @@ jobs:
           pip install -r runner/requirements.txt
 
       - name: Install Node dependencies
-        run: npm ci
+        run: npm i
 
       - name: Check for required files
         run: |
