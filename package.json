@@ -76,8 +76,5 @@
     "portable": {
       "artifactName": "Auto-Desktop-Portable-${version}.${ext}"
     }
-  },
-  "overrides": {
-    "@noble/hashes": "1.4.0"
   }
 }
