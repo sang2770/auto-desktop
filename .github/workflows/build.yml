@@ -21,7 +21,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "20"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -34,7 +34,7 @@ jobs:
           pip install -r runner/requirements.txt
 
       - name: Install Node dependencies
-        run: npm i
+        run: npm ci
 
       - name: Check for required files
         run: |
@@ -48,7 +48,7 @@ jobs:
         run: |
           npm run build:app
           npm run build:runner:win
-          npx electron-builder --win
+          npx electron-builder --win --publish never
         env:
           CI: true
 
@@ -80,7 +80,7 @@ jobs:
           draft: false
           prerelease: false
           body: |
-            🚀 **YouTube Automation Tool - Windows Release**
+            🚀 **Automation Tool - Windows Release**
 
             **Build Information:**
             - Version: v${{ github.run_number }}
