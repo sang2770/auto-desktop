@@ -333,23 +333,25 @@ def take_screenshot(region=None) -> Any:
                 log(f"Warning: Invalid region size ({w}x{h}). Falling back to full screen grab.")
                 return ImageGrab.grab(all_screens=True)
             
-            scaled_region = (
-                int(x),
-                int(y),
-                int(x + w),
-                int(y + h),
+            # Since the process is not DPI-aware, GDI / ImageGrab.grab expects LOGICAL coordinates
+            scale = get_actual_scale()
+            logical_region = (
+                int(x / scale),
+                int(y / scale),
+                int((x + w) / scale),
+                int((y + h) / scale),
             )
             try:
-                return ImageGrab.grab(bbox=scaled_region, all_screens=True)
+                return ImageGrab.grab(bbox=logical_region, all_screens=True)
             except Exception as err:
-                log(f"ImageGrab.grab with bbox {scaled_region} failed: {err}. Falling back to virtual screen grab and crop.")
+                log(f"ImageGrab.grab with bbox {logical_region} failed: {err}. Falling back to virtual screen grab and crop.")
                 full_img = ImageGrab.grab(all_screens=True)
                 if sys.platform == "win32":
                     try:
                         import ctypes
                         user32 = ctypes.windll.user32
-                        min_x = user32.GetSystemMetrics(76) # SM_XVIRTUALSCREEN
-                        min_y = user32.GetSystemMetrics(77) # SM_YVIRTUALSCREEN
+                        min_x = user32.GetSystemMetrics(76) # SM_XVIRTUALSCREEN (logical)
+                        min_y = user32.GetSystemMetrics(77) # SM_YVIRTUALSCREEN (logical)
                     except Exception:
                         min_x = 0
                         min_y = 0
@@ -357,11 +359,15 @@ def take_screenshot(region=None) -> Any:
                     min_x = 0
                     min_y = 0
                 
+                # Convert logical min_x, min_y back to physical coordinates
+                physical_min_x = int(min_x * scale)
+                physical_min_y = int(min_y * scale)
+                
                 adjusted_region = (
-                    scaled_region[0] - min_x,
-                    scaled_region[1] - min_y,
-                    scaled_region[2] - min_x,
-                    scaled_region[3] - min_y,
+                    int(x - physical_min_x),
+                    int(y - physical_min_y),
+                    int(x + w - physical_min_x),
+                    int(y + h - physical_min_y),
                 )
                 return full_img.crop(adjusted_region)
         except Exception as e:
@@ -1672,6 +1678,9 @@ def send_telegram_message(bot_token: str, chat_id: str, message: str, photo_byte
     import urllib.error
     import urllib.parse
     
+    # Percent-encode bot_token to prevent UnicodeEncodeError in case it contains non-ASCII characters
+    safe_token = urllib.parse.quote(bot_token)
+    
     if photo_bytes:
         boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW"
         parts = []
@@ -1697,7 +1706,7 @@ def send_telegram_message(bot_token: str, chat_id: str, message: str, photo_byte
         parts.append(b'')
         
         body = b'\r\n'.join(parts)
-        url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+        url = f"https://api.telegram.org/bot{safe_token}/sendPhoto"
         headers = {
             "Content-Type": f"multipart/form-data; boundary={boundary}",
             "Content-Length": str(len(body))
@@ -1707,7 +1716,7 @@ def send_telegram_message(bot_token: str, chat_id: str, message: str, photo_byte
             "chat_id": chat_id,
             "text": message
         }).encode('utf-8')
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        url = f"https://api.telegram.org/bot{safe_token}/sendMessage"
         headers = {
             "Content-Type": "application/x-www-form-urlencoded"
         }
