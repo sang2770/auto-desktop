@@ -211,12 +211,13 @@ function StepCard({
   }, [step]);
 
   useEffect(() => {
-    setHasRegion(
-      "region" in step &&
-        Array.isArray(step.region) &&
-        step.region.length === 4,
-    );
-  }, [step]);
+    if (step.type === "send_telegram") {
+      const stepAny = step as any;
+      if (!stepAny.region || !Array.isArray(stepAny.region) || stepAny.region.length !== 4) {
+        onUpdate({ ...step, region: [0, 0, 1920, 1080] } as Step);
+      }
+    }
+  }, [step.type, (step as any).region]);
 
   const region = "region" in step && step.region ? step.region : [0, 0, 0, 0];
 
@@ -1860,8 +1861,6 @@ function StepCard({
                   onUpdate({
                     ...step,
                     ocrRevenue: checked,
-                    captureScreen: checked ? false : step.captureScreen,
-                    image: checked ? undefined : step.image,
                   } as Step);
                 }}
               />
@@ -1869,258 +1868,304 @@ function StepCard({
                 Nhận diện doanh thu bằng OCR (OCR Revenue)
               </label>
             </div>
-
-            {!step.ocrRevenue && (
-              <>
-                <div
-                  className="form-group-checkbox"
-                  style={{ marginTop: "8px" }}
-                >
-                  <input
-                    type="checkbox"
-                    id={`telegram-capture-${index}`}
-                    checked={step.captureScreen !== false}
-                    onChange={(e) => {
-                      const checked = e.target.checked;
-                      onUpdate({
-                        ...step,
-                        captureScreen: checked,
-                        image: checked ? undefined : step.image,
-                      } as Step);
-                    }}
-                  />
-                  <label htmlFor={`telegram-capture-${index}`}>
-                    Chụp ảnh màn hình đính kèm (chụp tại thời điểm chạy)
-                  </label>
-                </div>
-
-                {step.captureScreen === false && (
-                  <div
-                    className="image-upload-wrapper form-section"
-                    style={{ border: "none", margin: "10px 0 0 0", padding: 0 }}
-                  >
-                    <div className="form-group">
-                      <label>
-                        Ảnh đính kèm tĩnh (Tải lên hoặc chụp màn hình trước)
-                      </label>
-                      <div
-                        style={{
-                          display: "flex",
-                          gap: "10px",
-                          marginTop: "4px",
-                        }}
-                      >
-                        <div className="image-upload-box" style={{ flex: 1 }}>
-                          <span className="image-upload-text">
-                            📁 Chọn file ảnh
-                          </span>
-                          <input
-                            type="file"
-                            accept="image/*"
-                            onChange={(e) => handleImageUpload(e, "image")}
-                          />
-                        </div>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            const res = await desktopApi.captureRegion();
-                            if (res) {
-                              if (isElectronDesktopApi) {
-                                const path = await desktopApi.saveImage({
-                                  name: "crop-telegram.png",
-                                  base64: res.base64,
-                                });
-                                onUpdate({ ...step, image: path } as Step);
-                              } else {
-                                onUpdate({
-                                  ...step,
-                                  image: res.base64,
-                                } as Step);
-                              }
-                            }
-                          }}
-                          style={{
-                            background: "rgba(255,255,255,0.06)",
-                            border: "1px dashed rgba(255,255,255,0.2)",
-                          }}
-                        >
-                          📷 Chụp trực tiếp
-                        </button>
-                      </div>
-                    </div>
-                    <ImagePreview filePath={step.image} />
-                  </div>
-                )}
-              </>
-            )}
           </>
         )}
 
-        {/* Region config common helper for visual steps */}
-        {("region" in step ||
-          [
-            "send_telegram",
-            "wait_for_image",
-            "check_text",
-            "click",
-            "double_click",
-            "conditional",
-            "conditional_workflow",
-            "check_interval",
-          ].includes(step.type)) && (
+        {/* Region config helper */}
+        {step.type === "send_telegram" ? (
           <div
             className="form-section"
             style={{ border: "none", margin: 0, padding: 0 }}
           >
-            <div className="form-group-checkbox">
-              <input
-                type="checkbox"
-                id={`check-region-${index}`}
-                checked={hasRegion}
-                onChange={(e) => {
-                  const checked = e.target.checked;
-                  setHasRegion(checked);
-                  if (checked) {
-                    onUpdate({ ...step, region: [0, 0, 1920, 1080] } as Step);
-                  } else {
-                    const stepCopy = { ...step };
-                    // @ts-ignore
-                    delete stepCopy.region;
-                    onUpdate(stepCopy as Step);
+            <div className="form-grid" style={{ marginTop: "4px" }}>
+              <div className="form-group">
+                <label>Vùng chụp X (X start)</label>
+                <input
+                  type="number"
+                  value={region[0]}
+                  onChange={(e) =>
+                    onUpdate({
+                      ...step,
+                      region: [
+                        parseInt(e.target.value) || 0,
+                        region[1],
+                        region[2],
+                        region[3],
+                      ],
+                    } as Step)
                   }
-                }}
-              />
-              <label htmlFor={`check-region-${index}`}>
-                Giới hạn vùng quét màn hình (Region)
-              </label>
-            </div>
-
-            {hasRegion && (
-              <div className="form-grid" style={{ marginTop: "4px" }}>
-                <div className="form-group">
-                  <label>X bắt đầu</label>
-                  <input
-                    type="number"
-                    value={region[0]}
-                    onChange={(e) =>
-                      onUpdate({
-                        ...step,
-                        region: [
-                          parseInt(e.target.value) || 0,
-                          region[1],
-                          region[2],
-                          region[3],
-                        ],
-                      } as Step)
-                    }
-                  />
+                />
+              </div>
+              <div className="form-group">
+                <label>Vùng chụp Y (Y start)</label>
+                <input
+                  type="number"
+                  value={region[1]}
+                  onChange={(e) =>
+                    onUpdate({
+                      ...step,
+                      region: [
+                        region[0],
+                        parseInt(e.target.value) || 0,
+                        region[2],
+                        region[3],
+                      ],
+                    } as Step)
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>Chiều rộng (Width)</label>
+                <input
+                  type="number"
+                  value={region[2]}
+                  onChange={(e) =>
+                    onUpdate({
+                      ...step,
+                      region: [
+                        region[0],
+                        region[1],
+                        parseInt(e.target.value) || 0,
+                        region[3],
+                      ],
+                    } as Step)
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>Chiều cao (Height)</label>
+                <input
+                  type="number"
+                  value={region[3]}
+                  onChange={(e) =>
+                    onUpdate({
+                      ...step,
+                      region: [
+                        region[0],
+                        region[1],
+                        region[2],
+                        parseInt(e.target.value) || 0,
+                      ],
+                    } as Step)
+                  }
+                />
+              </div>
+              <div
+                className="form-group"
+                style={{ gridColumn: "span 4", display: "flex", gap: "8px" }}
+              >
+                <div style={{ flex: 1 }}>
+                  <label>Lấy vùng quét di chuột</label>
+                  <button
+                    type="button"
+                    onClick={startRegionCapture}
+                    disabled={regionCountdown !== null}
+                    style={{
+                      width: "100%",
+                      marginTop: "6px",
+                      background:
+                        regionCountdown !== null
+                          ? "#3b82f6"
+                          : "rgba(255, 255, 255, 0.08)",
+                    }}
+                  >
+                    {regionCountdown !== null
+                      ? regionPhase === "topleft"
+                        ? `Góc TRÊN - TRÁI... (${regionCountdown}s)`
+                        : `Góc DƯỚI - PHẢI... (${regionCountdown}s)`
+                      : "🔍 Di chuột 2 góc"}
+                  </button>
                 </div>
-                <div className="form-group">
-                  <label>Y bắt đầu</label>
-                  <input
-                    type="number"
-                    value={region[1]}
-                    onChange={(e) =>
-                      onUpdate({
-                        ...step,
-                        region: [
-                          region[0],
-                          parseInt(e.target.value) || 0,
-                          region[2],
-                          region[3],
-                        ],
-                      } as Step)
-                    }
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Chiều rộng</label>
-                  <input
-                    type="number"
-                    value={region[2]}
-                    onChange={(e) =>
-                      onUpdate({
-                        ...step,
-                        region: [
-                          region[0],
-                          region[1],
-                          parseInt(e.target.value) || 0,
-                          region[3],
-                        ],
-                      } as Step)
-                    }
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Chiều cao</label>
-                  <input
-                    type="number"
-                    value={region[3]}
-                    onChange={(e) =>
-                      onUpdate({
-                        ...step,
-                        region: [
-                          region[0],
-                          region[1],
-                          region[2],
-                          parseInt(e.target.value) || 0,
-                        ],
-                      } as Step)
-                    }
-                  />
-                </div>
-                <div
-                  className="form-group"
-                  style={{ gridColumn: "span 4", display: "flex", gap: "8px" }}
-                >
-                  <div style={{ flex: 1 }}>
-                    <label>Lấy vùng quét di chuột</label>
-                    <button
-                      type="button"
-                      onClick={startRegionCapture}
-                      disabled={regionCountdown !== null}
-                      style={{
-                        width: "100%",
-                        marginTop: "6px",
-                        background:
-                          regionCountdown !== null
-                            ? "#3b82f6"
-                            : "rgba(255, 255, 255, 0.08)",
-                      }}
-                    >
-                      {regionCountdown !== null
-                        ? regionPhase === "topleft"
-                          ? `Góc TRÊN - TRÁI... (${regionCountdown}s)`
-                          : `Góc DƯỚI - PHẢI... (${regionCountdown}s)`
-                        : "🔍 Di chuột 2 góc"}
-                    </button>
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <label>Vẽ vùng quét trực quan</label>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        const res = await desktopApi.captureRegion();
-                        if (res) {
-                          onUpdate({
-                            ...step,
-                            region: [res.x, res.y, res.width, res.height],
-                          } as Step);
-                        }
-                      }}
-                      style={{
-                        width: "100%",
-                        marginTop: "6px",
-                        background: "rgba(255, 255, 255, 0.08)",
-                      }}
-                    >
-                      🎯 Vẽ vùng quét (Lightshot)
-                    </button>
-                  </div>
+                <div style={{ flex: 1 }}>
+                  <label>Vẽ vùng quét trực quan</label>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const res = await desktopApi.captureRegion();
+                      if (res) {
+                        onUpdate({
+                          ...step,
+                          region: [res.x, res.y, res.width, res.height],
+                        } as Step);
+                      }
+                    }}
+                    style={{
+                      width: "100%",
+                      marginTop: "6px",
+                      background: "rgba(255, 255, 255, 0.08)",
+                    }}
+                  >
+                    🎯 Vẽ vùng quét (Lightshot)
+                  </button>
                 </div>
               </div>
-            )}
+            </div>
           </div>
+        ) : (
+          ("region" in step ||
+            [
+              "wait_for_image",
+              "check_text",
+              "click",
+              "double_click",
+              "conditional",
+              "conditional_workflow",
+              "check_interval",
+            ].includes(step.type)) && (
+            <div
+              className="form-section"
+              style={{ border: "none", margin: 0, padding: 0 }}
+            >
+              <div className="form-group-checkbox">
+                <input
+                  type="checkbox"
+                  id={`check-region-${index}`}
+                  checked={hasRegion}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setHasRegion(checked);
+                    if (checked) {
+                      onUpdate({ ...step, region: [0, 0, 1920, 1080] } as Step);
+                    } else {
+                      const stepCopy = { ...step };
+                      // @ts-ignore
+                      delete stepCopy.region;
+                      onUpdate(stepCopy as Step);
+                    }
+                  }}
+                />
+                <label htmlFor={`check-region-${index}`}>
+                  Giới hạn vùng quét màn hình (Region)
+                </label>
+              </div>
+
+              {hasRegion && (
+                <div className="form-grid" style={{ marginTop: "4px" }}>
+                  <div className="form-group">
+                    <label>X bắt đầu</label>
+                    <input
+                      type="number"
+                      value={region[0]}
+                      onChange={(e) =>
+                        onUpdate({
+                          ...step,
+                          region: [
+                            parseInt(e.target.value) || 0,
+                            region[1],
+                            region[2],
+                            region[3],
+                          ],
+                        } as Step)
+                      }
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Y bắt đầu</label>
+                    <input
+                      type="number"
+                      value={region[1]}
+                      onChange={(e) =>
+                        onUpdate({
+                          ...step,
+                          region: [
+                            region[0],
+                            parseInt(e.target.value) || 0,
+                            region[2],
+                            region[3],
+                          ],
+                        } as Step)
+                      }
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Chiều rộng</label>
+                    <input
+                      type="number"
+                      value={region[2]}
+                      onChange={(e) =>
+                        onUpdate({
+                          ...step,
+                          region: [
+                            region[0],
+                            region[1],
+                            parseInt(e.target.value) || 0,
+                            region[3],
+                          ],
+                        } as Step)
+                      }
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Chiều cao</label>
+                    <input
+                      type="number"
+                      value={region[3]}
+                      onChange={(e) =>
+                        onUpdate({
+                          ...step,
+                          region: [
+                            region[0],
+                            region[1],
+                            region[2],
+                            parseInt(e.target.value) || 0,
+                          ],
+                        } as Step)
+                      }
+                    />
+                  </div>
+                  <div
+                    className="form-group"
+                    style={{ gridColumn: "span 4", display: "flex", gap: "8px" }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <label>Lấy vùng quét di chuột</label>
+                      <button
+                        type="button"
+                        onClick={startRegionCapture}
+                        disabled={regionCountdown !== null}
+                        style={{
+                          width: "100%",
+                          marginTop: "6px",
+                          background:
+                            regionCountdown !== null
+                              ? "#3b82f6"
+                              : "rgba(255, 255, 255, 0.08)",
+                        }}
+                      >
+                        {regionCountdown !== null
+                          ? regionPhase === "topleft"
+                            ? `Góc TRÊN - TRÁI... (${regionCountdown}s)`
+                            : `Góc DƯỚI - PHẢI... (${regionCountdown}s)`
+                          : "🔍 Di chuột 2 góc"}
+                      </button>
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label>Vẽ vùng quét trực quan</label>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const res = await desktopApi.captureRegion();
+                          if (res) {
+                            onUpdate({
+                              ...step,
+                              region: [res.x, res.y, res.width, res.height],
+                            } as Step);
+                          }
+                        }}
+                        style={{
+                          width: "100%",
+                          marginTop: "6px",
+                          background: "rgba(255, 255, 255, 0.08)",
+                        }}
+                      >
+                        🎯 Vẽ vùng quét (Lightshot)
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
         )}
       </div>
     </div>
@@ -2507,9 +2552,8 @@ function App() {
         botToken: "",
         chatId: "",
         message: "Báo cáo kết quả",
-        captureScreen: true,
         ocrRevenue: false,
-        region: undefined,
+        region: [0, 0, 1920, 1080],
       };
     } else {
       newStep = {

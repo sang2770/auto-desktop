@@ -326,14 +326,47 @@ def get_actual_scale() -> float:
 
 def take_screenshot(region=None) -> Any:
     from PIL import ImageGrab
-    if region:
-        scaled_region = (
-            int(region[0]),
-            int(region[1]),
-            int(region[0] + region[2]),
-            int(region[1] + region[3]),
-        )
-        return ImageGrab.grab(bbox=scaled_region, all_screens=True)
+    if region and isinstance(region, (list, tuple)) and len(region) >= 4:
+        try:
+            x, y, w, h = float(region[0]), float(region[1]), float(region[2]), float(region[3])
+            if w <= 0 or h <= 0:
+                log(f"Warning: Invalid region size ({w}x{h}). Falling back to full screen grab.")
+                return ImageGrab.grab(all_screens=True)
+            
+            scaled_region = (
+                int(x),
+                int(y),
+                int(x + w),
+                int(y + h),
+            )
+            try:
+                return ImageGrab.grab(bbox=scaled_region, all_screens=True)
+            except Exception as err:
+                log(f"ImageGrab.grab with bbox {scaled_region} failed: {err}. Falling back to virtual screen grab and crop.")
+                full_img = ImageGrab.grab(all_screens=True)
+                if sys.platform == "win32":
+                    try:
+                        import ctypes
+                        user32 = ctypes.windll.user32
+                        min_x = user32.GetSystemMetrics(76) # SM_XVIRTUALSCREEN
+                        min_y = user32.GetSystemMetrics(77) # SM_YVIRTUALSCREEN
+                    except Exception:
+                        min_x = 0
+                        min_y = 0
+                else:
+                    min_x = 0
+                    min_y = 0
+                
+                adjusted_region = (
+                    scaled_region[0] - min_x,
+                    scaled_region[1] - min_y,
+                    scaled_region[2] - min_x,
+                    scaled_region[3] - min_y,
+                )
+                return full_img.crop(adjusted_region)
+        except Exception as e:
+            log(f"Error parsing region coordinates {region}: {e}. Grabbing all screens.")
+            return ImageGrab.grab(all_screens=True)
     return ImageGrab.grab(all_screens=True)
 
 
@@ -1694,44 +1727,65 @@ def send_telegram_message(bot_token: str, chat_id: str, message: str, photo_byte
 def parse_revenue_from_text(text: str) -> float:
     import re
     text_upper = text.upper().strip()
-    match = re.search(r'[\d.,]+', text_upper)
-    if not match:
-        return 0.0
-        
-    num_str = match.group(0)
+    log(f"Original OCR text for parsing: '{text_upper}'")
     
-    if num_str.count('.') > 1:
-        num_str = num_str.replace('.', '')
-    if num_str.count(',') > 1:
-        num_str = num_str.replace(',', '')
-        
-    if ',' in num_str and '.' in num_str:
-        comma_idx = num_str.index(',')
-        dot_idx = num_str.index('.')
-        if comma_idx < dot_idx:
-            num_str = num_str.replace(',', '')
-        else:
-            num_str = num_str.replace('.', '').replace(',', '.')
-    elif ',' in num_str:
-        parts = num_str.split(',')
-        if len(parts) == 2 and len(parts[1]) in (1, 2):
-            num_str = num_str.replace(',', '.')
-        else:
-            num_str = num_str.replace(',', '')
-    elif '.' in num_str:
-        parts = num_str.split('.')
-        if len(parts) == 2 and len(parts[1]) == 3:
-            num_str = num_str.replace('.', '')
-            
-    try:
-        val = float(num_str)
-        if 'K' in text_upper:
-            val *= 1000
-        elif 'M' in text_upper:
-            val *= 1000000
-        return val
-    except ValueError:
+    # Remove spaces between digits, e.g. "150 000" -> "150000"
+    text_clean = re.sub(r'(?<=\d)\s+(?=\d)', '', text_upper)
+    # Remove spaces around dots or commas between digits, e.g. "150 . 000" -> "150.000"
+    text_clean = re.sub(r'(?<=\d)\s*([.,])\s*(?=\d)', r'\1', text_clean)
+    log(f"Cleaned OCR text: '{text_clean}'")
+    
+    matches = re.findall(r'[\d.,]+', text_clean)
+    if not matches:
         return 0.0
+        
+    parsed_values = []
+    for num_str in matches:
+        if num_str in ('.', ','):
+            continue
+            
+        temp_str = num_str
+        if temp_str.count('.') > 1:
+            temp_str = temp_str.replace('.', '')
+        if temp_str.count(',') > 1:
+            temp_str = temp_str.replace(',', '')
+            
+        if ',' in temp_str and '.' in temp_str:
+            comma_idx = temp_str.index(',')
+            dot_idx = temp_str.index('.')
+            if comma_idx < dot_idx:
+                temp_str = temp_str.replace(',', '')
+            else:
+                temp_str = temp_str.replace('.', '').replace(',', '.')
+        elif ',' in temp_str:
+            parts = temp_str.split(',')
+            if len(parts) == 2 and len(parts[1]) in (1, 2):
+                temp_str = temp_str.replace(',', '.')
+            else:
+                temp_str = temp_str.replace(',', '')
+        elif '.' in temp_str:
+            parts = temp_str.split('.')
+            if len(parts) == 2 and len(parts[1]) == 3:
+                temp_str = temp_str.replace('.', '')
+                
+        try:
+            val = float(temp_str)
+            idx = text_clean.find(num_str)
+            if idx != -1:
+                after_str = text_clean[idx + len(num_str):].strip()
+                if after_str.startswith('K'):
+                    val *= 1000
+                elif after_str.startswith('M'):
+                    val *= 1000000
+            parsed_values.append(val)
+        except ValueError:
+            pass
+            
+    if not parsed_values:
+        return 0.0
+        
+    val = max(parsed_values)
+    return val
 
 def format_vietnamese_money(value: float) -> str:
     return f"{int(value):,}".replace(",", ".")
@@ -1756,9 +1810,7 @@ def step_send_telegram(step: dict[str, Any], dry_run: bool) -> None:
     chat_id = normalize_optional_string(step.get("chatId"))
     message = step.get("message", "")
     ocr_revenue = step.get("ocrRevenue", False)
-    capture_screen = step.get("captureScreen", True)
     region = step.get("region")
-    image_path = step.get("image")
     
     if not bot_token or not chat_id:
         raise ValueError("botToken and chatId are required for send_telegram step.")
@@ -1767,18 +1819,50 @@ def step_send_telegram(step: dict[str, Any], dry_run: bool) -> None:
         if ocr_revenue:
             log(f"DRY RUN send_telegram OCR revenue to chatId={chat_id} message='{message}' region={region}")
         else:
-            log(f"DRY RUN send_telegram to chatId={chat_id} message='{message}' image={image_path} captureScreen={capture_screen} region={region}")
+            log(f"DRY RUN send_telegram to chatId={chat_id} message='{message}' region={region}")
         return
         
+    # Always capture the screenshot of the region to send
+    photo_bytes = None
+    screenshot = None
+    try:
+        if region:
+            log(f"Capturing region screenshot: {region}")
+            screenshot = take_screenshot(region)
+        else:
+            log("Warning: No region specified for send_telegram step. Capturing all screens.")
+            screenshot = take_screenshot(None)
+            
+        import io
+        img_byte_arr = io.BytesIO()
+        screenshot.save(img_byte_arr, format='PNG')
+        img_byte_arr.seek(0)
+        photo_bytes = img_byte_arr.read()
+        log("Captured screenshot of region for Telegram notification.")
+    except Exception as e:
+        log(f"Failed to capture region screenshot: {e}.")
+
     if ocr_revenue:
         try:
-            log(f"Performing OCR on region={region} to detect revenue...")
-            extracted_text = extract_text_from_screen(
-                region=region,
-                lang="eng",
-                tesseract_config="--psm 6",
-                threshold=None
-            )
+            extracted_text = ""
+            if screenshot:
+                log("Performing OCR on the captured screenshot to detect revenue...")
+                try:
+                    import pytesseract
+                    variants = prepare_ocr_variants(screenshot, threshold=None)
+                    extracted_results: list[str] = []
+                    for idx, variant in enumerate(variants):
+                        text = pytesseract.image_to_string(variant, lang="eng", config="--psm 6").strip()
+                        log(f"OCR Variant {idx} saw: '{text}'")
+                        extracted_results.append(text)
+                    
+                    extracted_results.sort(key=len, reverse=True)
+                    extracted_text = extracted_results[0] if extracted_results else ""
+                except Exception as ocr_err:
+                    log(f"OCR execution failed: {ocr_err}")
+            else:
+                log("No screenshot available to perform OCR.")
+                
             log(f"OCR extracted text: '{extracted_text}'")
             current_val = parse_revenue_from_text(extracted_text)
             cumulative_revenue += current_val
@@ -1789,35 +1873,11 @@ def step_send_telegram(step: dict[str, Any], dry_run: bool) -> None:
             total_str = format_vietnamese_money(cumulative_revenue)
             formatted_message = message.replace("{current}", current_str).replace("{total}", total_str)
             
-            send_telegram_message(bot_token, chat_id, formatted_message, photo_bytes=None)
+            send_telegram_message(bot_token, chat_id, formatted_message, photo_bytes)
         except Exception as e:
             log(f"Failed to perform OCR revenue or send message: {e}")
             raise
     else:
-        photo_bytes = None
-        if image_path:
-            try:
-                if os.path.exists(image_path):
-                    with open(image_path, "rb") as f:
-                        photo_bytes = f.read()
-                    log(f"Loaded attached image for Telegram: {image_path}")
-                else:
-                    log(f"Attached image file not found: {image_path}. Falling back to live screen capture.")
-            except Exception as e:
-                log(f"Failed to load attached image {image_path}: {e}")
-
-        if not photo_bytes and capture_screen:
-            try:
-                screenshot = take_screenshot(region)
-                import io
-                img_byte_arr = io.BytesIO()
-                screenshot.save(img_byte_arr, format='PNG')
-                img_byte_arr.seek(0)
-                photo_bytes = img_byte_arr.read()
-                log("Captured screenshot for Telegram notification.")
-            except Exception as e:
-                log(f"Failed to capture screenshot: {e}. Sending text message only.")
-                
         send_telegram_message(bot_token, chat_id, message, photo_bytes)
 
 
