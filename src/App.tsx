@@ -223,6 +223,7 @@ function StepCard({
 
   // Coords Capture
   const [coordsCountdown, setCoordsCountdown] = useState<number | null>(null);
+  const [captureTarget, setCaptureTarget] = useState<"single" | "list" | "drag_start" | "drag_end" | "scroll_pos" | null>(null);
 
   useEffect(() => {
     if (coordsCountdown === null) return;
@@ -239,8 +240,23 @@ function StepCard({
 
       getPos.then((pos) => {
         if (pos) {
-          onUpdate({ ...step, x: pos.x, y: pos.y } as Step);
+          if (captureTarget === "list") {
+            const currentPoints = (step as any).points || [];
+            onUpdate({
+              ...step,
+              points: [...currentPoints, { x: pos.x, y: pos.y }],
+            } as Step);
+          } else if (captureTarget === "drag_start") {
+            onUpdate({ ...step, startX: pos.x, startY: pos.y } as Step);
+          } else if (captureTarget === "drag_end") {
+            onUpdate({ ...step, endX: pos.x, endY: pos.y } as Step);
+          } else if (captureTarget === "scroll_pos") {
+            onUpdate({ ...step, x: pos.x, y: pos.y } as Step);
+          } else {
+            onUpdate({ ...step, x: pos.x, y: pos.y } as Step);
+          }
         }
+        setCaptureTarget(null);
       });
     }
   }, [coordsCountdown]);
@@ -388,6 +404,8 @@ function StepCard({
             {step.type === "press_key" && "Nhấn Phím"}
             {step.type === "abort_iteration" && "Hủy Phiên Live"}
             {step.type === "send_telegram" && "Gửi Telegram"}
+            {step.type === "drag" && "Kéo chuột"}
+            {step.type === "scroll" && "Cuộn chuột"}
           </span>
           <input
             type="text"
@@ -535,6 +553,27 @@ function StepCard({
                   ocrRevenue: false,
                   region: undefined,
                 });
+              } else if (newType === "drag") {
+                onUpdate({
+                  type: "drag",
+                  name: step.name,
+                  startX: 0,
+                  startY: 0,
+                  endX: 0,
+                  endY: 0,
+                  durationSec: 0.5,
+                  button: "left",
+                  delayBeforeSec: 0,
+                  delayAfterSec: 0,
+                });
+              } else if (newType === "scroll") {
+                onUpdate({
+                  type: "scroll",
+                  name: step.name,
+                  amount: -100,
+                  delayBeforeSec: 0,
+                  delayAfterSec: 0,
+                });
               }
             }}
           >
@@ -570,6 +609,8 @@ function StepCard({
             <option value="send_telegram">
               Gửi báo cáo Telegram (Send Telegram)
             </option>
+            <option value="drag">Nhấn giữ kéo chuột (Drag)</option>
+            <option value="scroll">Cuộn chuột (Scroll)</option>
           </select>
         </div>
 
@@ -685,76 +726,215 @@ function StepCard({
               </div>
               {step.clickType === "coordinate" && (
                 <>
-                  <div className="form-group">
-                    <label>Toạ độ X</label>
-                    <input
-                      type="number"
-                      value={step.x ?? 0}
-                      onChange={(e) =>
-                        onUpdate({ ...step, x: parseInt(e.target.value) || 0 })
-                      }
-                    />
+                  <div className="form-group" style={{ gridColumn: "span 2" }}>
+                    <label>Chế độ Click</label>
+                    <select
+                      value={(step as any).clickMode || "single"}
+                      onChange={(e) => {
+                        const mode = e.target.value as "single" | "random";
+                        onUpdate({
+                          ...step,
+                          clickMode: mode,
+                          points: mode === "random" ? ((step as any).points || []) : undefined,
+                        } as Step);
+                      }}
+                    >
+                      <option value="single">Một toạ độ cố định</option>
+                      <option value="random">Ngẫu nhiên từ danh sách điểm</option>
+                    </select>
                   </div>
-                  <div className="form-group">
-                    <label>Toạ độ Y</label>
-                    <input
-                      type="number"
-                      value={step.y ?? 0}
-                      onChange={(e) =>
-                        onUpdate({ ...step, y: parseInt(e.target.value) || 0 })
-                      }
-                    />
-                  </div>
-                  <div
-                    className="form-group"
-                    style={{
-                      gridColumn: "span 2",
-                      display: "flex",
-                      gap: "8px",
-                    }}
-                  >
-                    <div style={{ flex: 1 }}>
-                      <label>Lấy toạ độ di chuột</label>
-                      <button
-                        type="button"
-                        onClick={() => setCoordsCountdown(3)}
-                        disabled={coordsCountdown !== null}
-                        style={{
-                          width: "100%",
-                          marginTop: "6px",
-                          background:
-                            coordsCountdown !== null
-                              ? "#c85f1f"
-                              : "rgba(255, 255, 255, 0.08)",
-                        }}
-                      >
-                        {coordsCountdown !== null
-                          ? `Di chuột... (${coordsCountdown}s)`
-                          : "🔍 Di chuột lấy điểm"}
-                      </button>
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <label>Vẽ khoanh vùng</label>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          const res = await desktopApi.captureRegion();
-                          if (res) {
-                            const cx = res.x + Math.round(res.width / 2);
-                            const cy = res.y + Math.round(res.height / 2);
-                            onUpdate({ ...step, x: cx, y: cy });
+                  
+                  {((step as any).clickMode || "single") === "single" ? (
+                    <>
+                      <div className="form-group">
+                        <label>Toạ độ X</label>
+                        <input
+                          type="number"
+                          value={step.x ?? 0}
+                          onChange={(e) =>
+                            onUpdate({ ...step, x: parseInt(e.target.value) || 0 })
                           }
-                        }}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>Toạ độ Y</label>
+                        <input
+                          type="number"
+                          value={step.y ?? 0}
+                          onChange={(e) =>
+                            onUpdate({ ...step, y: parseInt(e.target.value) || 0 })
+                          }
+                        />
+                      </div>
+                      <div
+                        className="form-group"
                         style={{
-                          width: "100%",
-                          marginTop: "6px",
-                          background: "rgba(255, 255, 255, 0.08)",
+                          gridColumn: "span 2",
+                          display: "flex",
+                          gap: "8px",
                         }}
                       >
-                        🎯 Vẽ vùng (Lấy Tâm)
-                      </button>
-                    </div>
-                  </div>
+                        <div style={{ flex: 1 }}>
+                          <label>Lấy toạ độ di chuột</label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCaptureTarget("single");
+                              setCoordsCountdown(3);
+                            }}
+                            disabled={coordsCountdown !== null}
+                            style={{
+                              width: "100%",
+                              marginTop: "6px",
+                              background:
+                                coordsCountdown !== null
+                                  ? "#c85f1f"
+                                  : "rgba(255, 255, 255, 0.08)",
+                            }}
+                          >
+                            {coordsCountdown !== null && captureTarget === "single"
+                              ? `Di chuột... (${coordsCountdown}s)`
+                              : "🔍 Di chuột lấy điểm"}
+                          </button>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <label>Vẽ khoanh vùng</label>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const res = await desktopApi.captureRegion();
+                              if (res) {
+                                const cx = res.x + Math.round(res.width / 2);
+                                const cy = res.y + Math.round(res.height / 2);
+                                onUpdate({ ...step, x: cx, y: cy });
+                              }
+                            }}
+                            style={{
+                              width: "100%",
+                              marginTop: "6px",
+                              background: "rgba(255, 255, 255, 0.08)",
+                            }}
+                          >
+                            🎯 Vẽ vùng (Lấy Tâm)
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="form-group" style={{ gridColumn: "span 2" }}>
+                        <label>Danh sách điểm toạ độ (sẽ click ngẫu nhiên 1 điểm)</label>
+                        <div style={{
+                          maxHeight: "150px",
+                          overflowY: "auto",
+                          background: "rgba(0,0,0,0.2)",
+                          border: "1px solid rgba(255,255,255,0.1)",
+                          borderRadius: "4px",
+                          padding: "8px",
+                          marginTop: "6px",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "4px"
+                        }}>
+                          {((step as any).points || []).length === 0 ? (
+                            <div style={{ color: "rgba(255,255,255,0.4)", fontSize: "13px", fontStyle: "italic" }}>
+                              Chưa có điểm nào trong danh sách. Hãy thêm điểm.
+                            </div>
+                          ) : (
+                            ((step as any).points || []).map((p: { x: number; y: number }, idx: number) => (
+                              <div key={idx} style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                                background: "rgba(255,255,255,0.04)",
+                                padding: "4px 8px",
+                                borderRadius: "4px",
+                                fontSize: "13px"
+                              }}>
+                                <span>Điểm {idx + 1}: X = {p.x}, Y = {p.y}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const newPoints = [...((step as any).points || [])];
+                                    newPoints.splice(idx, 1);
+                                    onUpdate({ ...step, points: newPoints } as Step);
+                                  }}
+                                  style={{
+                                    background: "transparent",
+                                    border: "none",
+                                    color: "#ef4444",
+                                    cursor: "pointer",
+                                    padding: "2px 6px",
+                                    fontSize: "14px",
+                                    fontWeight: "bold"
+                                  }}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                      <div
+                        className="form-group"
+                        style={{
+                          gridColumn: "span 2",
+                          display: "flex",
+                          gap: "8px",
+                        }}
+                      >
+                        <div style={{ flex: 1 }}>
+                          <label>Lấy toạ độ thêm vào danh sách</label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCaptureTarget("list");
+                              setCoordsCountdown(3);
+                            }}
+                            disabled={coordsCountdown !== null}
+                            style={{
+                              width: "100%",
+                              marginTop: "6px",
+                              background:
+                                coordsCountdown !== null
+                                  ? "#c85f1f"
+                                  : "rgba(255, 255, 255, 0.08)",
+                            }}
+                          >
+                            {coordsCountdown !== null && captureTarget === "list"
+                              ? `Di chuột... (${coordsCountdown}s)`
+                              : "🔍 Di chuột lấy điểm"}
+                          </button>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <label>Vẽ khoanh vùng thêm tâm</label>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const res = await desktopApi.captureRegion();
+                              if (res) {
+                                const cx = res.x + Math.round(res.width / 2);
+                                const cy = res.y + Math.round(res.height / 2);
+                                const currentPoints = (step as any).points || [];
+                                onUpdate({
+                                  ...step,
+                                  points: [...currentPoints, { x: cx, y: cy }],
+                                } as Step);
+                              }
+                            }}
+                            style={{
+                              width: "100%",
+                              marginTop: "6px",
+                              background: "rgba(255, 255, 255, 0.08)",
+                            }}
+                          >
+                            🎯 Vẽ vùng (Thêm Tâm)
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </>
               )}
               {step.clickType === "image" && (
@@ -1822,6 +2002,8 @@ function StepCard({
                 placeholder={
                   step.ocrRevenue
                     ? "Doanh thu phiên live: {current}đ. Tổng tích lũy từ đầu: {total}đ"
+                    : step.ocrText
+                    ? "Nội dung nhận dạng: {text}. Hoặc nhập tin nhắn khác..."
                     : "Nhập nội dung thông báo kèm theo..."
                 }
                 rows={2}
@@ -1849,6 +2031,18 @@ function StepCard({
                   {"{total}"} cho tổng tích luỹ trong nội dung tin nhắn.
                 </div>
               )}
+              {step.ocrText && (
+                <div
+                  style={{
+                    fontSize: "0.8rem",
+                    color: "rgba(255,255,255,0.4)",
+                    marginTop: "4px",
+                    fontStyle: "italic",
+                  }}
+                >
+                  * Sử dụng {"{text}"} để chèn văn bản nhận diện bằng OCR vào nội dung tin nhắn. Nếu không có {"{text}"}, văn bản nhận diện sẽ tự động được gửi kèm.
+                </div>
+              )}
             </div>
 
             <div className="form-group-checkbox">
@@ -1861,12 +2055,316 @@ function StepCard({
                   onUpdate({
                     ...step,
                     ocrRevenue: checked,
+                    ocrText: checked ? false : step.ocrText,
                   } as Step);
                 }}
               />
               <label htmlFor={`telegram-ocr-${index}`}>
                 Nhận diện doanh thu bằng OCR (OCR Revenue)
               </label>
+            </div>
+
+            <div className="form-group-checkbox" style={{ marginTop: "8px" }}>
+              <input
+                type="checkbox"
+                id={`telegram-ocr-text-${index}`}
+                checked={step.ocrText === true}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  onUpdate({
+                    ...step,
+                    ocrText: checked,
+                    ocrRevenue: checked ? false : step.ocrRevenue,
+                  } as Step);
+                }}
+              />
+              <label htmlFor={`telegram-ocr-text-${index}`}>
+                Nhận diện chữ bằng OCR (OCR Text)
+              </label>
+            </div>
+          </>
+        )}
+
+        {step.type === "drag" && (
+          <>
+            <div className="form-grid">
+              <div className="form-group">
+                <label>Toạ độ X bắt đầu (startX)</label>
+                <input
+                  type="number"
+                  value={step.startX ?? 0}
+                  onChange={(e) =>
+                    onUpdate({ ...step, startX: parseInt(e.target.value) || 0 })
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>Toạ độ Y bắt đầu (startY)</label>
+                <input
+                  type="number"
+                  value={step.startY ?? 0}
+                  onChange={(e) =>
+                    onUpdate({ ...step, startY: parseInt(e.target.value) || 0 })
+                  }
+                />
+              </div>
+              <div
+                className="form-group"
+                style={{
+                  gridColumn: "span 2",
+                  display: "flex",
+                  gap: "8px",
+                }}
+              >
+                <div style={{ flex: 1 }}>
+                  <label>Lấy toạ độ di chuột bắt đầu</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCaptureTarget("drag_start");
+                      setCoordsCountdown(3);
+                    }}
+                    disabled={coordsCountdown !== null}
+                    style={{
+                      width: "100%",
+                      marginTop: "6px",
+                      background:
+                        coordsCountdown !== null
+                          ? "#c85f1f"
+                          : "rgba(255, 255, 255, 0.08)",
+                    }}
+                  >
+                    {coordsCountdown !== null && captureTarget === "drag_start"
+                      ? `Di chuột... (${coordsCountdown}s)`
+                      : "🔍 Di chuột lấy điểm"}
+                  </button>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label>Vẽ khoanh vùng bắt đầu</label>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const res = await desktopApi.captureRegion();
+                      if (res) {
+                        const cx = res.x + Math.round(res.width / 2);
+                        const cy = res.y + Math.round(res.height / 2);
+                        onUpdate({ ...step, startX: cx, startY: cy });
+                      }
+                    }}
+                    style={{
+                      width: "100%",
+                      marginTop: "6px",
+                      background: "rgba(255, 255, 255, 0.08)",
+                    }}
+                  >
+                    🎯 Vẽ vùng (Lấy Tâm)
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="form-grid" style={{ marginTop: "12px" }}>
+              <div className="form-group">
+                <label>Toạ độ X kết thúc (endX)</label>
+                <input
+                  type="number"
+                  value={step.endX ?? 0}
+                  onChange={(e) =>
+                    onUpdate({ ...step, endX: parseInt(e.target.value) || 0 })
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>Toạ độ Y kết thúc (endY)</label>
+                <input
+                  type="number"
+                  value={step.endY ?? 0}
+                  onChange={(e) =>
+                    onUpdate({ ...step, endY: parseInt(e.target.value) || 0 })
+                  }
+                />
+              </div>
+              <div
+                className="form-group"
+                style={{
+                  gridColumn: "span 2",
+                  display: "flex",
+                  gap: "8px",
+                }}
+              >
+                <div style={{ flex: 1 }}>
+                  <label>Lấy toạ độ di chuột kết thúc</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCaptureTarget("drag_end");
+                      setCoordsCountdown(3);
+                    }}
+                    disabled={coordsCountdown !== null}
+                    style={{
+                      width: "100%",
+                      marginTop: "6px",
+                      background:
+                        coordsCountdown !== null
+                          ? "#c85f1f"
+                          : "rgba(255, 255, 255, 0.08)",
+                    }}
+                  >
+                    {coordsCountdown !== null && captureTarget === "drag_end"
+                      ? `Di chuột... (${coordsCountdown}s)`
+                      : "🔍 Di chuột lấy điểm"}
+                  </button>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label>Vẽ khoanh vùng kết thúc</label>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const res = await desktopApi.captureRegion();
+                      if (res) {
+                        const cx = res.x + Math.round(res.width / 2);
+                        const cy = res.y + Math.round(res.height / 2);
+                        onUpdate({ ...step, endX: cx, endY: cy });
+                      }
+                    }}
+                    style={{
+                      width: "100%",
+                      marginTop: "6px",
+                      background: "rgba(255, 255, 255, 0.08)",
+                    }}
+                  >
+                    🎯 Vẽ vùng (Lấy Tâm)
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="form-grid" style={{ marginTop: "12px" }}>
+              <div className="form-group">
+                <label>Thời gian kéo (giây)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={step.durationSec ?? 0.5}
+                  onChange={(e) =>
+                    onUpdate({ ...step, durationSec: parseFloat(e.target.value) || 0.5 })
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>Nút chuột</label>
+                <select
+                  value={step.button || "left"}
+                  onChange={(e) =>
+                    onUpdate({ ...step, button: e.target.value as any })
+                  }
+                >
+                  <option value="left">Trái (Left)</option>
+                  <option value="right">Phải (Right)</option>
+                  <option value="middle">Giữa (Middle)</option>
+                </select>
+              </div>
+            </div>
+          </>
+        )}
+
+        {step.type === "scroll" && (
+          <>
+            <div className="form-grid">
+              <div className="form-group">
+                <label>Khoảng cách cuộn (amount)</label>
+                <input
+                  type="number"
+                  placeholder="e.g. -100 (xuống), 100 (lên)"
+                  value={step.amount ?? 0}
+                  onChange={(e) =>
+                    onUpdate({ ...step, amount: parseInt(e.target.value) || 0 })
+                  }
+                />
+              </div>
+              <div className="form-group" style={{ display: "flex", flexDirection: "column", justifyContent: "end" }}>
+                <span style={{ fontSize: "12px", color: "rgba(255,255,255,0.4)", marginBottom: "8px" }}>
+                  * Số âm để cuộn xuống, số dương để cuộn lên.
+                </span>
+              </div>
+            </div>
+
+            <div className="form-grid" style={{ marginTop: "12px" }}>
+              <div className="form-group">
+                <label>Toạ độ X di chuột trước khi cuộn (Không bắt buộc)</label>
+                <input
+                  type="number"
+                  value={step.x ?? ""}
+                  onChange={(e) =>
+                    onUpdate({ ...step, x: e.target.value ? parseInt(e.target.value) : undefined })
+                  }
+                  placeholder="Bỏ qua nếu không di chuột"
+                />
+              </div>
+              <div className="form-group">
+                <label>Toạ độ Y di chuột trước khi cuộn (Không bắt buộc)</label>
+                <input
+                  type="number"
+                  value={step.y ?? ""}
+                  onChange={(e) =>
+                    onUpdate({ ...step, y: e.target.value ? parseInt(e.target.value) : undefined })
+                  }
+                  placeholder="Bỏ qua nếu không di chuột"
+                />
+              </div>
+              <div
+                className="form-group"
+                style={{
+                  gridColumn: "span 2",
+                  display: "flex",
+                  gap: "8px",
+                }}
+              >
+                <div style={{ flex: 1 }}>
+                  <label>Lấy toạ độ di chuột cuộn</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCaptureTarget("scroll_pos");
+                      setCoordsCountdown(3);
+                    }}
+                    disabled={coordsCountdown !== null}
+                    style={{
+                      width: "100%",
+                      marginTop: "6px",
+                      background:
+                        coordsCountdown !== null
+                          ? "#c85f1f"
+                          : "rgba(255, 255, 255, 0.08)",
+                    }}
+                  >
+                    {coordsCountdown !== null && captureTarget === "scroll_pos"
+                      ? `Di chuột... (${coordsCountdown}s)`
+                      : "🔍 Di chuột lấy điểm"}
+                  </button>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label>Vẽ khoanh vùng cuộn</label>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const res = await desktopApi.captureRegion();
+                      if (res) {
+                        const cx = res.x + Math.round(res.width / 2);
+                        const cy = res.y + Math.round(res.height / 2);
+                        onUpdate({ ...step, x: cx, y: cy });
+                      }
+                    }}
+                    style={{
+                      width: "100%",
+                      marginTop: "6px",
+                      background: "rgba(255, 255, 255, 0.08)",
+                    }}
+                  >
+                    🎯 Vẽ vùng (Lấy Tâm)
+                  </button>
+                </div>
+              </div>
             </div>
           </>
         )}
@@ -2554,6 +3052,27 @@ function App() {
         message: "Báo cáo kết quả",
         ocrRevenue: false,
         region: [0, 0, 1920, 1080],
+      };
+    } else if (type === "drag") {
+      newStep = {
+        type: "drag",
+        name: "Kéo thả chuột",
+        startX: 0,
+        startY: 0,
+        endX: 0,
+        endY: 0,
+        durationSec: 0.5,
+        button: "left",
+        delayBeforeSec: 0,
+        delayAfterSec: 0,
+      };
+    } else if (type === "scroll") {
+      newStep = {
+        type: "scroll",
+        name: "Cuộn chuột (Scroll)",
+        amount: -100,
+        delayBeforeSec: 0,
+        delayAfterSec: 0,
       };
     } else {
       newStep = {
@@ -3711,6 +4230,26 @@ function App() {
                       >
                         + Gửi Telegram
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("drag")}
+                        style={{
+                          background: "rgba(59, 130, 246, 0.15)",
+                          borderColor: "rgba(59, 130, 246, 0.3)",
+                        }}
+                      >
+                        + Kéo thả chuột
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("scroll")}
+                        style={{
+                          background: "rgba(139, 92, 246, 0.15)",
+                          borderColor: "rgba(139, 92, 246, 0.3)",
+                        }}
+                      >
+                        + Cuộn chuột
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -3872,6 +4411,10 @@ function App() {
                                   `Dừng Chu Kỳ: ${step.intervalId || "(Chưa nhập ID)"}`}
                                 {step.type === "press_key" &&
                                   `Nhấn phím: ${step.key.toUpperCase()}`}
+                                {step.type === "drag" &&
+                                  `Kéo chuột: (${step.startX},${step.startY}) -> (${step.endX},${step.endY})`}
+                                {step.type === "scroll" &&
+                                  `Cuộn chuột: ${step.amount}`}
                               </p>
                               {isFailed && (
                                 <div

@@ -913,8 +913,18 @@ def step_click(step: dict[str, Any], dry_run: bool) -> None:
             if not found:
                 raise TimeoutError(f"Text for clicking not found within timeout: '{text_val}'")
     else:
-        x_phys = step.get("x")
-        y_phys = step.get("y")
+        click_mode = step.get("clickMode", "single")
+        points = step.get("points", [])
+        if click_mode == "random" and points:
+            import random
+            selected_point = random.choice(points)
+            x_phys = selected_point.get("x")
+            y_phys = selected_point.get("y")
+            log(f"Random click mode enabled. Selected point ({x_phys}, {y_phys}) from {len(points)} points.")
+        else:
+            x_phys = step.get("x")
+            y_phys = step.get("y")
+
         if x_phys is None or y_phys is None:
             raise ValueError("Coordinates x and y are required for click by coordinate.")
         scale = get_actual_scale()
@@ -1079,8 +1089,18 @@ def step_double_click(step: dict[str, Any], dry_run: bool) -> None:
             if not found:
                 raise TimeoutError(f"Text for double clicking not found within timeout: '{text_val}'")
     else:
-        x_phys = step.get("x")
-        y_phys = step.get("y")
+        click_mode = step.get("clickMode", "single")
+        points = step.get("points", [])
+        if click_mode == "random" and points:
+            import random
+            selected_point = random.choice(points)
+            x_phys = selected_point.get("x")
+            y_phys = selected_point.get("y")
+            log(f"Random double click mode enabled. Selected point ({x_phys}, {y_phys}) from {len(points)} points.")
+        else:
+            x_phys = step.get("x")
+            y_phys = step.get("y")
+
         if x_phys is None or y_phys is None:
             raise ValueError("Coordinates x and y are required for double click by coordinate.")
         scale = get_actual_scale()
@@ -1112,6 +1132,80 @@ def step_double_click(step: dict[str, Any], dry_run: bool) -> None:
     delay_after = float(step.get("delayAfterSec", 0))
     if delay_after > 0:
         log(f"Waiting {delay_after}s after double click...")
+        wait_with_pause(delay_after, abortable=True)
+
+
+def step_drag(step: dict[str, Any], dry_run: bool) -> None:
+    delay_before = float(step.get("delayBeforeSec", 0))
+    if delay_before > 0:
+        log(f"Waiting {delay_before}s before drag...")
+        wait_with_pause(delay_before, abortable=True)
+
+    start_x_phys = step.get("startX")
+    start_y_phys = step.get("startY")
+    end_x_phys = step.get("endX")
+    end_y_phys = step.get("endY")
+    duration = float(step.get("durationSec", 0.5))
+    button = step.get("button", "left").lower()
+
+    if start_x_phys is None or start_y_phys is None or end_x_phys is None or end_y_phys is None:
+        raise ValueError("startX, startY, endX, and endY are required for drag step.")
+
+    scale = get_actual_scale()
+    start_x = start_x_phys / scale
+    start_y = start_y_phys / scale
+    end_x = end_x_phys / scale
+    end_y = end_y_phys / scale
+
+    if dry_run:
+        log(f"DRY RUN drag from ({start_x}, {start_y}) to ({end_x}, {end_y}) over {duration}s button={button}")
+    else:
+        try:
+            import pyautogui  # type: ignore
+        except ImportError as error:
+            raise RuntimeError("pyautogui is required for drag action.") from error
+
+        log(f"Dragging from ({start_x}, {start_y}) to ({end_x}, {end_y}) over {duration}s button={button}")
+        pyautogui.moveTo(start_x, start_y)
+        pyautogui.dragTo(end_x, end_y, duration=duration, button=button)
+
+    delay_after = float(step.get("delayAfterSec", 0))
+    if delay_after > 0:
+        log(f"Waiting {delay_after}s after drag...")
+        wait_with_pause(delay_after, abortable=True)
+
+
+def step_scroll(step: dict[str, Any], dry_run: bool) -> None:
+    delay_before = float(step.get("delayBeforeSec", 0))
+    if delay_before > 0:
+        log(f"Waiting {delay_before}s before scroll...")
+        wait_with_pause(delay_before, abortable=True)
+
+    amount = int(step.get("amount", 0))
+    x_phys = step.get("x")
+    y_phys = step.get("y")
+
+    scale = get_actual_scale()
+    x = x_phys / scale if x_phys is not None else None
+    y = y_phys / scale if y_phys is not None else None
+
+    if dry_run:
+        log(f"DRY RUN scroll amount={amount} at x={x}, y={y}")
+    else:
+        try:
+            import pyautogui  # type: ignore
+        except ImportError as error:
+            raise RuntimeError("pyautogui is required for scroll action.") from error
+
+        log(f"Scrolling amount={amount} at x={x}, y={y}")
+        if x is not None and y is not None:
+            pyautogui.scroll(amount, x=int(x), y=int(y))
+        else:
+            pyautogui.scroll(amount)
+
+    delay_after = float(step.get("delayAfterSec", 0))
+    if delay_after > 0:
+        log(f"Waiting {delay_after}s after scroll...")
         wait_with_pause(delay_after, abortable=True)
 
 
@@ -1653,6 +1747,12 @@ def execute_step_list(steps: list[dict[str, Any]], dry_run: bool, label: str, st
         elif step_type == "send_telegram":
             with gui_lock:
                 step_send_telegram(step, dry_run)
+        elif step_type == "drag":
+            with gui_lock:
+                step_drag(step, dry_run)
+        elif step_type == "scroll":
+            with gui_lock:
+                step_scroll(step, dry_run)
         else:
             raise ValueError(f"Unsupported step type: {step_type}")
 
@@ -1819,6 +1919,7 @@ def step_send_telegram(step: dict[str, Any], dry_run: bool) -> None:
     chat_id = normalize_optional_string(step.get("chatId"))
     message = step.get("message", "")
     ocr_revenue = step.get("ocrRevenue", False)
+    ocr_text = step.get("ocrText", False)
     region = step.get("region")
     
     if not bot_token or not chat_id:
@@ -1827,6 +1928,8 @@ def step_send_telegram(step: dict[str, Any], dry_run: bool) -> None:
     if dry_run:
         if ocr_revenue:
             log(f"DRY RUN send_telegram OCR revenue to chatId={chat_id} message='{message}' region={region}")
+        elif ocr_text:
+            log(f"DRY RUN send_telegram OCR text to chatId={chat_id} message='{message}' region={region}")
         else:
             log(f"DRY RUN send_telegram to chatId={chat_id} message='{message}' region={region}")
         return
@@ -1885,6 +1988,40 @@ def step_send_telegram(step: dict[str, Any], dry_run: bool) -> None:
             send_telegram_message(bot_token, chat_id, formatted_message, photo_bytes)
         except Exception as e:
             log(f"Failed to perform OCR revenue or send message: {e}")
+            raise
+    elif ocr_text:
+        try:
+            extracted_text = ""
+            if screenshot:
+                log("Performing OCR on the captured screenshot to extract text...")
+                try:
+                    import pytesseract
+                    variants = prepare_ocr_variants(screenshot, threshold=None)
+                    extracted_results: list[str] = []
+                    for idx, variant in enumerate(variants):
+                        text = pytesseract.image_to_string(variant, lang="eng", config="--psm 6").strip()
+                        log(f"OCR Variant {idx} saw: '{text}'")
+                        extracted_results.append(text)
+                    
+                    extracted_results.sort(key=len, reverse=True)
+                    extracted_text = extracted_results[0] if extracted_results else ""
+                except Exception as ocr_err:
+                    log(f"OCR execution failed: {ocr_err}")
+            else:
+                log("No screenshot available to perform OCR.")
+                
+            log(f"OCR extracted text: '{extracted_text}'")
+            if "{text}" in message:
+                formatted_message = message.replace("{text}", extracted_text)
+            else:
+                if message:
+                    formatted_message = f"{message}\n{extracted_text}"
+                else:
+                    formatted_message = extracted_text
+            
+            send_telegram_message(bot_token, chat_id, formatted_message, photo_bytes)
+        except Exception as e:
+            log(f"Failed to perform OCR text or send message: {e}")
             raise
     else:
         send_telegram_message(bot_token, chat_id, message, photo_bytes)

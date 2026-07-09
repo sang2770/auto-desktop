@@ -4,6 +4,8 @@ export type ClickStep = {
   clickType: "coordinate" | "image" | "text";
   x?: number;
   y?: number;
+  clickMode?: "single" | "random";
+  points?: Array<{ x: number; y: number }>;
   image?: string;
   text?: string;
   region?: [number, number, number, number];
@@ -20,6 +22,8 @@ export type DoubleClickStep = {
   clickType: "coordinate" | "image" | "text";
   x?: number;
   y?: number;
+  clickMode?: "single" | "random";
+  points?: Array<{ x: number; y: number }>;
   image?: string;
   text?: string;
   region?: [number, number, number, number];
@@ -137,8 +141,32 @@ export type SendTelegramStep = {
   message?: string;
   captureScreen?: boolean;
   ocrRevenue?: boolean;
+  ocrText?: boolean;
   image?: string;
   region?: [number, number, number, number];
+};
+
+export type DragStep = {
+  type: "drag";
+  name: string;
+  startX: number;
+  startY: number;
+  endX: number;
+  endY: number;
+  durationSec?: number;
+  button?: "left" | "right" | "middle";
+  delayBeforeSec?: number;
+  delayAfterSec?: number;
+};
+
+export type ScrollStep = {
+  type: "scroll";
+  name: string;
+  amount: number;
+  x?: number;
+  y?: number;
+  delayBeforeSec?: number;
+  delayAfterSec?: number;
 };
 
 export type Step =
@@ -155,7 +183,9 @@ export type Step =
   | ClearIntervalStep
   | PressKeyStep
   | AbortIterationStep
-  | SendTelegramStep;
+  | SendTelegramStep
+  | DragStep
+  | ScrollStep;
 
 export type Workflow = {
   name: string;
