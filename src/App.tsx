@@ -851,6 +851,20 @@ function StepCard({
                   ) : (
                     <>
                       <div className="form-group" style={{ gridColumn: "span 2" }}>
+                        <label>Tên biến chỉ số (Tùy chọn - Nếu thiết lập, sẽ click điểm theo chỉ số từ biến. Nếu chỉ số vượt quá danh sách thì click ngẫu nhiên)</label>
+                        <input
+                          type="text"
+                          placeholder="Ví dụ: index"
+                          value={(step as any).indexVariable || ""}
+                          onChange={(e) =>
+                            onUpdate({
+                              ...step,
+                              indexVariable: e.target.value,
+                            } as Step)
+                          }
+                        />
+                      </div>
+                      <div className="form-group" style={{ gridColumn: "span 2" }}>
                         <label>Danh sách điểm toạ độ (sẽ click ngẫu nhiên 1 điểm)</label>
                         <div style={{
                           maxHeight: "150px",

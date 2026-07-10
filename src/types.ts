@@ -14,6 +14,7 @@ export type ClickStep = {
   delayBeforeSec?: number;
   delayAfterSec?: number;
   note?: string;
+  indexVariable?: string;
 };
 
 export type DoubleClickStep = {
@@ -33,6 +34,7 @@ export type DoubleClickStep = {
   delayBeforeSec?: number;
   delayAfterSec?: number;
   note?: string;
+  indexVariable?: string;
 };
 
 export type WaitStep = {

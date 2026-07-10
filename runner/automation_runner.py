@@ -917,11 +917,30 @@ def step_click(step: dict[str, Any], dry_run: bool) -> None:
         click_mode = step.get("clickMode", "single")
         points = step.get("points", [])
         if click_mode == "random" and points:
-            import random
-            selected_point = random.choice(points)
+            index_var_name = step.get("indexVariable", "").strip()
+            selected_point = None
+            if index_var_name:
+                var_val = workflow_variables.get(index_var_name)
+                if var_val is not None:
+                    try:
+                        idx = int(float(var_val))
+                        if 0 <= idx < len(points):
+                            selected_point = points[idx]
+                            log(f"Selected point at index {idx} ({selected_point.get('x')}, {selected_point.get('y')}) using variable '{index_var_name}' from {len(points)} points.")
+                        else:
+                            log(f"Index {idx} from variable '{index_var_name}' is out of range [0, {len(points)-1}]. Selecting random point.")
+                    except (ValueError, TypeError) as e:
+                        log(f"Warning: Index variable '{index_var_name}' value '{var_val}' is not a valid number. Selecting random point. Error: {e}")
+                else:
+                    log(f"Variable '{index_var_name}' is not defined. Selecting random point.")
+            
+            if selected_point is None:
+                import random
+                selected_point = random.choice(points)
+                log(f"Random click mode enabled. Selected point ({selected_point.get('x')}, {selected_point.get('y')}) from {len(points)} points.")
+            
             x_phys = selected_point.get("x")
             y_phys = selected_point.get("y")
-            log(f"Random click mode enabled. Selected point ({x_phys}, {y_phys}) from {len(points)} points.")
         else:
             x_phys = step.get("x")
             y_phys = step.get("y")
@@ -1093,11 +1112,30 @@ def step_double_click(step: dict[str, Any], dry_run: bool) -> None:
         click_mode = step.get("clickMode", "single")
         points = step.get("points", [])
         if click_mode == "random" and points:
-            import random
-            selected_point = random.choice(points)
+            index_var_name = step.get("indexVariable", "").strip()
+            selected_point = None
+            if index_var_name:
+                var_val = workflow_variables.get(index_var_name)
+                if var_val is not None:
+                    try:
+                        idx = int(float(var_val))
+                        if 0 <= idx < len(points):
+                            selected_point = points[idx]
+                            log(f"Selected point at index {idx} ({selected_point.get('x')}, {selected_point.get('y')}) using variable '{index_var_name}' from {len(points)} points.")
+                        else:
+                            log(f"Index {idx} from variable '{index_var_name}' is out of range [0, {len(points)-1}]. Selecting random point.")
+                    except (ValueError, TypeError) as e:
+                        log(f"Warning: Index variable '{index_var_name}' value '{var_val}' is not a valid number. Selecting random point. Error: {e}")
+                else:
+                    log(f"Variable '{index_var_name}' is not defined. Selecting random point.")
+            
+            if selected_point is None:
+                import random
+                selected_point = random.choice(points)
+                log(f"Random double click mode enabled. Selected point ({selected_point.get('x')}, {selected_point.get('y')}) from {len(points)} points.")
+            
             x_phys = selected_point.get("x")
             y_phys = selected_point.get("y")
-            log(f"Random double click mode enabled. Selected point ({x_phys}, {y_phys}) from {len(points)} points.")
         else:
             x_phys = step.get("x")
             y_phys = step.get("y")
