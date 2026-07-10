@@ -169,6 +169,24 @@ export type ScrollStep = {
   delayAfterSec?: number;
 };
 
+export type SetVariableStep = {
+  type: "set_variable";
+  name: string;
+  variableName: string;
+  operator: "set" | "add" | "subtract" | "multiply" | "divide";
+  value: string;
+};
+
+export type ConditionalVariableStep = {
+  type: "conditional_variable";
+  name: string;
+  variableName: string;
+  operator: "==" | "!=" | ">" | "<" | ">=" | "<=";
+  value: string;
+  thenWorkflowPath?: string;
+  elseWorkflowPath?: string;
+};
+
 export type Step =
   | ClickStep
   | DoubleClickStep
@@ -185,7 +203,9 @@ export type Step =
   | AbortIterationStep
   | SendTelegramStep
   | DragStep
-  | ScrollStep;
+  | ScrollStep
+  | SetVariableStep
+  | ConditionalVariableStep;
 
 export type Workflow = {
   name: string;

@@ -107,6 +107,9 @@ function resolveWorkflowPaths(
       } else if (newStep.type === "conditional_workflow") {
         if (newStep.thenWorkflowPath) newStep.thenWorkflowPath = resolvePath(newStep.thenWorkflowPath);
         if (newStep.elseWorkflowPath) newStep.elseWorkflowPath = resolvePath(newStep.elseWorkflowPath);
+      } else if (newStep.type === "conditional_variable") {
+        if (newStep.thenWorkflowPath) newStep.thenWorkflowPath = resolvePath(newStep.thenWorkflowPath);
+        if (newStep.elseWorkflowPath) newStep.elseWorkflowPath = resolvePath(newStep.elseWorkflowPath);
       } else if (newStep.type === "check_interval" && newStep.actionWorkflowPath) {
         newStep.actionWorkflowPath = resolvePath(newStep.actionWorkflowPath);
       }
@@ -120,6 +123,9 @@ function resolveWorkflowPaths(
       if (newStep.type === "run_workflow" && newStep.workflowPath) {
         newStep.workflowPath = resolvePath(newStep.workflowPath);
       } else if (newStep.type === "conditional_workflow") {
+        if (newStep.thenWorkflowPath) newStep.thenWorkflowPath = resolvePath(newStep.thenWorkflowPath);
+        if (newStep.elseWorkflowPath) newStep.elseWorkflowPath = resolvePath(newStep.elseWorkflowPath);
+      } else if (newStep.type === "conditional_variable") {
         if (newStep.thenWorkflowPath) newStep.thenWorkflowPath = resolvePath(newStep.thenWorkflowPath);
         if (newStep.elseWorkflowPath) newStep.elseWorkflowPath = resolvePath(newStep.elseWorkflowPath);
       } else if (newStep.type === "check_interval" && newStep.actionWorkflowPath) {
@@ -406,6 +412,8 @@ function StepCard({
             {step.type === "send_telegram" && "Gửi Telegram"}
             {step.type === "drag" && "Kéo chuột"}
             {step.type === "scroll" && "Cuộn chuột"}
+            {step.type === "set_variable" && "Thiết Lập Biến"}
+            {step.type === "conditional_variable" && "So Sánh Biến"}
           </span>
           <input
             type="text"
@@ -574,6 +582,24 @@ function StepCard({
                   delayBeforeSec: 0,
                   delayAfterSec: 0,
                 });
+              } else if (newType === "set_variable") {
+                onUpdate({
+                  type: "set_variable",
+                  name: step.name,
+                  variableName: "violation_count",
+                  operator: "set",
+                  value: "0",
+                });
+              } else if (newType === "conditional_variable") {
+                onUpdate({
+                  type: "conditional_variable",
+                  name: step.name,
+                  variableName: "violation_count",
+                  operator: ">=",
+                  value: "3",
+                  thenWorkflowPath: "",
+                  elseWorkflowPath: "",
+                });
               }
             }}
           >
@@ -611,6 +637,8 @@ function StepCard({
             </option>
             <option value="drag">Nhấn giữ kéo chuột (Drag)</option>
             <option value="scroll">Cuộn chuột (Scroll)</option>
+            <option value="set_variable">Thiết lập biến (Set Variable)</option>
+            <option value="conditional_variable">So sánh biến (If Variable)</option>
           </select>
         </div>
 
@@ -2369,6 +2397,138 @@ function StepCard({
           </>
         )}
 
+        {step.type === "set_variable" && (
+          <>
+            <div className="form-grid">
+              <div className="form-group">
+                <label>Tên biến (Variable Name)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. violation_count"
+                  value={step.variableName ?? ""}
+                  onChange={(e) =>
+                    onUpdate({ ...step, variableName: e.target.value })
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>Phép toán (Operator)</label>
+                <select
+                  value={step.operator ?? "set"}
+                  onChange={(e) =>
+                    onUpdate({ ...step, operator: e.target.value as any })
+                  }
+                >
+                  <option value="set">Gán giá trị (=)</option>
+                  <option value="add">Cộng thêm (+)</option>
+                  <option value="subtract">Trừ bớt (-)</option>
+                  <option value="multiply">Nhân (*)</option>
+                  <option value="divide">Chia (/)</option>
+                </select>
+              </div>
+            </div>
+            <div className="form-group" style={{ marginTop: "12px" }}>
+              <label>Giá trị (Value)</label>
+              <input
+                type="text"
+                placeholder="e.g. 0 hoặc 1 hoặc chuỗi"
+                value={step.value ?? ""}
+                onChange={(e) =>
+                  onUpdate({ ...step, value: e.target.value })
+                }
+              />
+            </div>
+          </>
+        )}
+
+        {step.type === "conditional_variable" && (
+          <>
+            <div className="form-grid">
+              <div className="form-group">
+                <label>Tên biến cần so sánh</label>
+                <input
+                  type="text"
+                  placeholder="e.g. violation_count"
+                  value={step.variableName ?? ""}
+                  onChange={(e) =>
+                    onUpdate({ ...step, variableName: e.target.value })
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>Phép so sánh (Operator)</label>
+                <select
+                  value={step.operator ?? "=="}
+                  onChange={(e) =>
+                    onUpdate({ ...step, operator: e.target.value as any })
+                  }
+                >
+                  <option value="==">Bằng (==)</option>
+                  <option value="!=">Khác (!=)</option>
+                  <option value=">">Lớn hơn (&gt;)</option>
+                  <option value="<">Nhỏ hơn (&lt;)</option>
+                  <option value=">=">Lớn hơn hoặc bằng (&gt;=)</option>
+                  <option value="<=">Nhỏ hơn hoặc bằng (&lt;=)</option>
+                </select>
+              </div>
+            </div>
+            <div className="form-group" style={{ marginTop: "12px" }}>
+              <label>Giá trị so sánh (Value)</label>
+              <input
+                type="text"
+                placeholder="e.g. 3"
+                value={step.value ?? ""}
+                onChange={(e) =>
+                  onUpdate({ ...step, value: e.target.value })
+                }
+              />
+            </div>
+            <div
+              className="form-grid"
+              style={{
+                marginTop: "12px",
+                borderTop: "1px solid rgba(255,255,255,0.06)",
+                paddingTop: "12px",
+              }}
+            >
+              <div className="form-group">
+                <label>Nếu ĐÚNG (Thì chạy Flow)</label>
+                <select
+                  value={step.thenWorkflowPath ?? ""}
+                  onChange={(e) =>
+                    onUpdate({ ...step, thenWorkflowPath: e.target.value })
+                  }
+                >
+                  <option value="">-- Chọn workflow --</option>
+                  {savedWorkflows.map((path) => (
+                    <option key={path} value={path}>
+                      {workflowNames[path] || path.split(/[/\\]/).pop() || path}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Nếu SAI (Thì chạy Flow - Không bắt buộc)</label>
+                <select
+                  value={step.elseWorkflowPath ?? ""}
+                  onChange={(e) =>
+                    onUpdate({ ...step, elseWorkflowPath: e.target.value })
+                  }
+                >
+                  <option value="">
+                    -- Chọn workflow (bỏ qua nếu không cần) --
+                  </option>
+                  {savedWorkflows.map((path) => (
+                    <option key={path} value={path}>
+                      {workflowNames[path] || path.split(/[/\\]/).pop() || path}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          </>
+        )}
+
         {/* Region config helper */}
         {step.type === "send_telegram" ? (
           <div
@@ -3073,6 +3233,24 @@ function App() {
         amount: -100,
         delayBeforeSec: 0,
         delayAfterSec: 0,
+      };
+    } else if (type === "set_variable") {
+      newStep = {
+        type: "set_variable",
+        name: "Thiết lập biến",
+        variableName: "violation_count",
+        operator: "set",
+        value: "0",
+      };
+    } else if (type === "conditional_variable") {
+      newStep = {
+        type: "conditional_variable",
+        name: "So sánh biến (IF)",
+        variableName: "violation_count",
+        operator: ">=",
+        value: "3",
+        thenWorkflowPath: "",
+        elseWorkflowPath: "",
       };
     } else {
       newStep = {
@@ -4249,6 +4427,26 @@ function App() {
                         }}
                       >
                         + Cuộn chuột
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("set_variable")}
+                        style={{
+                          background: "rgba(20, 184, 166, 0.15)",
+                          borderColor: "rgba(20, 184, 166, 0.3)",
+                        }}
+                      >
+                        + Thiết lập Biến
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("conditional_variable")}
+                        style={{
+                          background: "rgba(244, 63, 94, 0.15)",
+                          borderColor: "rgba(244, 63, 94, 0.3)",
+                        }}
+                      >
+                        + So sánh Biến
                       </button>
                     </div>
                   </div>

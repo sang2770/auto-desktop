@@ -905,11 +905,11 @@ button.accent {
 .step-card-add-actions {
   display: flex;
   gap: 8px;
-  justify-content: center;
   padding: 12px;
   border: 1px dashed rgba(255, 255, 255, 0.1);
   border-radius: 12px;
   margin-top: 10px;
+  overflow: auto;
 }
 
 .step-card-add-actions button {
@@ -1324,5 +1324,7 @@ button.accent {
 }
 
 @keyframes step-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }

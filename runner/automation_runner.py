@@ -46,6 +46,7 @@ is_currently_paused = False
 runner_clicking = False
 abort_requested = False
 cumulative_revenue = 0.0
+workflow_variables = {}
 
 def cleanup_hook():
     global mouse_hook
@@ -1700,6 +1701,139 @@ def step_clear_interval(step: dict[str, Any]) -> None:
         else:
             log(f"Interval {interval_id} not found or already stopped.")
 
+def step_set_variable(step: dict[str, Any], dry_run: bool) -> None:
+    global workflow_variables
+    var_name = step.get("variableName", "").strip()
+    if not var_name:
+        log("Error: variableName is empty in set_variable step")
+        return
+    operator = step.get("operator", "set")
+    raw_val = step.get("value", "0")
+    
+    # Try to parse numeric value
+    try:
+        val = float(raw_val)
+        if val.is_integer():
+            val = int(val)
+    except ValueError:
+        val = raw_val
+        
+    if dry_run:
+        log(f"DRY RUN set_variable '{var_name}' {operator} '{val}'")
+        return
+        
+    current = workflow_variables.get(var_name, 0)
+    
+    def to_numeric(v):
+        try:
+            num = float(v)
+            if num.is_integer():
+                return int(num)
+            return num
+        except (ValueError, TypeError):
+            return None
+
+    current_num = to_numeric(current)
+    val_num = to_numeric(val)
+
+    if operator == "add":
+        if current_num is not None and val_num is not None:
+            new_val = current_num + val_num
+        else:
+            new_val = str(current) + str(val)
+    elif operator == "subtract":
+        if current_num is not None and val_num is not None:
+            new_val = current_num - val_num
+        else:
+            log(f"Warning: Cannot subtract non-numeric values: {current} and {val}")
+            new_val = current
+    elif operator == "multiply":
+        if current_num is not None and val_num is not None:
+            new_val = current_num * val_num
+        else:
+            log(f"Warning: Cannot multiply non-numeric values: {current} and {val}")
+            new_val = current
+    elif operator == "divide":
+        if current_num is not None and val_num is not None:
+            if val_num == 0:
+                log("Warning: Division by zero")
+                new_val = current
+            else:
+                new_val = current_num / val_num
+                if isinstance(new_val, float) and new_val.is_integer():
+                    new_val = int(new_val)
+        else:
+            log(f"Warning: Cannot divide non-numeric values: {current} and {val}")
+            new_val = current
+    else: # set
+        new_val = val
+        
+    workflow_variables[var_name] = new_val
+    log(f"Variable '{var_name}' updated: {current} -> {new_val}")
+
+def step_conditional_variable(step: dict[str, Any], dry_run: bool, depth: int) -> None:
+    global workflow_variables
+    var_name = step.get("variableName", "").strip()
+    if not var_name:
+        log("Error: variableName is empty in conditional_variable step")
+        return
+        
+    operator = step.get("operator", "==")
+    raw_val = step.get("value", "0")
+    
+    current = workflow_variables.get(var_name, 0)
+    
+    # Try to parse both current and compared value as float/int for numeric comparison
+    val_to_compare = raw_val
+    try:
+        parsed_compare = float(raw_val)
+        parsed_current = float(current)
+        # Both parsed successfully, compare as numbers
+        val_to_compare = parsed_compare
+        current_val = parsed_current
+    except (ValueError, TypeError):
+        # Otherwise compare as strings
+        val_to_compare = str(raw_val)
+        current_val = str(current)
+        
+    condition_met = False
+    if operator == "==":
+        condition_met = current_val == val_to_compare
+    elif operator == "!=":
+        condition_met = current_val != val_to_compare
+    elif operator == ">":
+        condition_met = current_val > val_to_compare
+    elif operator == "<":
+        condition_met = current_val < val_to_compare
+    elif operator == ">=":
+        condition_met = current_val >= val_to_compare
+    elif operator == "<=":
+        condition_met = current_val <= val_to_compare
+    else:
+        log(f"Warning: Unsupported operator '{operator}' in conditional_variable step")
+        
+    if dry_run:
+        log(f"DRY RUN conditional_variable: is '{var_name}'({current}) {operator} '{raw_val}'? -> {condition_met}")
+        # In dry run, assume condition is met for testing paths if provided
+        condition_met = True
+        
+    if condition_met:
+        then_path = step.get("thenWorkflowPath")
+        if then_path:
+            then_resolved = resolve_workflow_path(then_path)
+            log(f"Variable condition MET. Running THEN workflow: {then_resolved}")
+            step_run_workflow({"workflowPath": then_resolved}, dry_run, depth)
+        else:
+            log("Variable condition MET, but no thenWorkflowPath specified.")
+    else:
+        else_path = step.get("elseWorkflowPath")
+        if else_path:
+            else_resolved = resolve_workflow_path(else_path)
+            log(f"Variable condition NOT met. Running ELSE workflow: {else_resolved}")
+            step_run_workflow({"workflowPath": else_resolved}, dry_run, depth)
+        else:
+            log("Variable condition NOT met, and no elseWorkflowPath specified. Skipping.")
+
 def execute_step_list(steps: list[dict[str, Any]], dry_run: bool, label: str, step_delay: float = 0.0, depth: int = 0) -> None:
     global abort_requested
     log(f"Running {label} sequence with {len(steps)} step(s)")
@@ -1753,6 +1887,10 @@ def execute_step_list(steps: list[dict[str, Any]], dry_run: bool, label: str, st
         elif step_type == "scroll":
             with gui_lock:
                 step_scroll(step, dry_run)
+        elif step_type == "set_variable":
+            step_set_variable(step, dry_run)
+        elif step_type == "conditional_variable":
+            step_conditional_variable(step, dry_run, depth)
         else:
             raise ValueError(f"Unsupported step type: {step_type}")
 
@@ -2062,9 +2200,10 @@ def wait_until_schedule(workflow: dict[str, Any], dry_run: bool) -> None:
 
 
 def execute_workflow(workflow: dict[str, Any]) -> None:
-    global abort_requested, cumulative_revenue
+    global abort_requested, cumulative_revenue, workflow_variables
     abort_requested = False
     cumulative_revenue = 0.0
+    workflow_variables = {}
     
     if sys.platform == "win32":
         t = threading.Thread(target=mouse_listener, daemon=True)
