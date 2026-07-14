@@ -24,6 +24,7 @@ type DesktopApi = {
   setWindowAlwaysOnTop?: (flag: boolean) => Promise<boolean>;
   onStatusChange?: (callback: (status: "running" | "paused") => void) => () => void;
   onLog?: (callback: (log: string) => void) => () => void;
+  onEvent?: (callback: (payload: any) => void) => () => void;
   captureWindowLayout?: () => Promise<Array<{
     title: string;
     x: number;
@@ -138,6 +139,9 @@ const browserApi: DesktopApi = {
     return () => {};
   },
   onLog(callback) {
+    return () => {};
+  },
+  onEvent(callback) {
     return () => {};
   },
   async captureWindowLayout() {

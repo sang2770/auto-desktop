@@ -1328,3 +1328,158 @@ button.accent {
     transform: rotate(360deg);
   }
 }
+
+.runtime-section {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.runtime-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.runtime-section-header strong {
+  font-size: 0.92rem;
+}
+
+.runtime-section-header span {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.runtime-active-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.runtime-active-card {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(20, 184, 166, 0.2);
+  background: rgba(20, 184, 166, 0.08);
+}
+
+.runtime-active-card.interval {
+  border-color: rgba(56, 189, 248, 0.24);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.runtime-active-card.sequence {
+  border-color: rgba(168, 85, 247, 0.24);
+  background: rgba(168, 85, 247, 0.08);
+}
+
+.runtime-active-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.runtime-active-title span,
+.runtime-node-kind,
+.runtime-node-meta {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.runtime-active-detail,
+.runtime-node-subtitle,
+.runtime-node-detail {
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.8);
+  word-break: break-word;
+}
+
+.runtime-tree {
+  display: grid;
+  gap: 6px;
+}
+
+.runtime-node-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.runtime-node.running .runtime-node-row {
+  border-color: rgba(20, 184, 166, 0.25);
+  background: rgba(20, 184, 166, 0.08);
+}
+
+.runtime-node.completed .runtime-node-row {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.runtime-node.failed .runtime-node-row {
+  border-color: rgba(239, 68, 68, 0.24);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.runtime-node-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  margin-top: 4px;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.runtime-node-dot.running {
+  background: #14b8a6;
+  box-shadow: 0 0 0 4px rgba(20, 184, 166, 0.14);
+}
+
+.runtime-node-dot.completed {
+  background: #94a3b8;
+}
+
+.runtime-node-dot.failed {
+  background: #ef4444;
+  box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.14);
+}
+
+.runtime-node-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.runtime-node-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.runtime-node-detail.error {
+  color: #fca5a5;
+}
+
+.runtime-node-children {
+  margin-top: 6px;
+  display: grid;
+  gap: 6px;
+}
+
+.runtime-empty {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.82rem;
+}

@@ -138,6 +138,169 @@ function resolveWorkflowPaths(
   return updated;
 }
 
+type RuntimeNodeStatus = "running" | "completed" | "failed";
+
+type RuntimeNode = {
+  id: string;
+  parentId: string | null;
+  kind: string;
+  title: string;
+  subtitle?: string;
+  detail?: string;
+  status: RuntimeNodeStatus;
+  children: string[];
+  threadId?: number;
+  depth?: number;
+  stepIndex?: number;
+  totalSteps?: number;
+  label?: string;
+  stepType?: string;
+  error?: string;
+  updatedAt?: string;
+};
+
+type RuntimeState = {
+  items: Record<string, RuntimeNode>;
+  roots: string[];
+};
+
+const emptyRuntimeState: RuntimeState = {
+  items: {},
+  roots: [],
+};
+
+function describeStep(step: any): string {
+  if (!step) return "";
+  if (step.type === "wait") return `Chờ ${((step.ms || 0) / 1000).toFixed(1)}s`;
+  if (step.type === "wait_for_image") return `Đợi ảnh ${step.image ? step.image.split(/[/\\]/).pop() : ""}`;
+  if (step.type === "check_text") return `Kiểm tra chữ "${step.text || ""}"`;
+  if (step.type === "click") {
+    if ((step.clickType || "coordinate") === "image") {
+      return `Click theo ảnh ${step.image ? step.image.split(/[/\\]/).pop() : ""}`;
+    }
+    if (step.clickType === "text") {
+      return `Click theo chữ "${step.text || ""}"`;
+    }
+    return `Click tọa độ ${step.x ?? 0}, ${step.y ?? 0}`;
+  }
+  if (step.type === "double_click") {
+    if ((step.clickType || "coordinate") === "image") {
+      return `Double click theo ảnh ${step.image ? step.image.split(/[/\\]/).pop() : ""}`;
+    }
+    if (step.clickType === "text") {
+      return `Double click theo chữ "${step.text || ""}"`;
+    }
+    return `Double click tọa độ ${step.x ?? 0}, ${step.y ?? 0}`;
+  }
+  if (step.type === "run_workflow") {
+    return `Flow con ${step.workflowPath ? step.workflowPath.split(/[/\\]/).pop() : "(chưa chọn)"}`;
+  }
+  if (step.type === "conditional_workflow") {
+    return `Rẽ nhánh ${step.conditionType === "text" ? `theo chữ "${step.text || ""}"` : "theo ảnh"}`;
+  }
+  if (step.type === "check_interval") {
+    return `Chu kỳ ${step.intervalId || ""} mỗi ${step.intervalSec || 0}s`;
+  }
+  if (step.type === "clear_interval") return `Dừng chu kỳ ${step.intervalId || ""}`;
+  if (step.type === "press_key") return `Nhấn phím ${String(step.key || "").toUpperCase()}`;
+  if (step.type === "send_telegram") return "Gửi Telegram";
+  if (step.type === "drag") return `Kéo chuột ${step.startX ?? 0},${step.startY ?? 0} -> ${step.endX ?? 0},${step.endY ?? 0}`;
+  if (step.type === "scroll") return `Cuộn ${step.amount ?? 0}`;
+  if (step.type === "conditional") return `Nếu ${step.conditionType === "text" ? `thấy "${step.text || ""}"` : "thấy ảnh"} thì ${step.actionType}`;
+  if (step.type === "set_variable") return `Gán biến ${step.variableName || ""}`;
+  if (step.type === "conditional_variable") return `So sánh biến ${step.variableName || ""}`;
+  if (step.type === "launch_app") return step.command || "Chạy ứng dụng";
+  return step.type || "";
+}
+
+function runtimeTitleFromEvent(event: any, current?: RuntimeNode): string {
+  if (event.title) return event.title;
+  if (current?.title) return current.title;
+  if (event.type?.startsWith("workflow")) return event.workflowName || "Workflow";
+  if (event.type?.startsWith("sequence")) return event.label || "Sequence";
+  if (event.type?.startsWith("interval")) return event.intervalId ? `Interval ${event.intervalId}` : "Interval";
+  if (event.type?.startsWith("step")) return event.step?.name || event.stepType || "Step";
+  return "Runtime";
+}
+
+function runtimeKindFromEvent(event: any): string {
+  if (event.type?.startsWith("workflow")) return "workflow";
+  if (event.type?.startsWith("sequence")) return "sequence";
+  if (event.type?.startsWith("interval")) return "interval";
+  if (event.type?.startsWith("step")) return "step";
+  return "task";
+}
+
+function runtimeSubtitleFromEvent(event: any, current?: RuntimeNode): string {
+  if (event.step) return describeStep(event.step);
+  if (event.kind === "workflow" || event.type?.startsWith("workflow")) {
+    return event.workflowName || current?.subtitle || "";
+  }
+  if (event.label) return event.label;
+  return current?.subtitle || "";
+}
+
+function attachRuntimeNode(state: RuntimeState, nodeId: string, parentId: string | null) {
+  state.roots = state.roots.filter((id) => id !== nodeId);
+  if (parentId) {
+    const parent = state.items[parentId];
+    if (parent && !parent.children.includes(nodeId)) {
+      parent.children = [...parent.children, nodeId];
+    } else if (!state.roots.includes(nodeId)) {
+      state.roots.push(nodeId);
+    }
+  } else if (!state.roots.includes(nodeId)) {
+    state.roots.push(nodeId);
+  }
+}
+
+function reduceRuntimeEvent(state: RuntimeState, event: any): RuntimeState {
+  const nodeId = event.id || event.taskId;
+  if (!nodeId) return state;
+
+  const next: RuntimeState = {
+    items: { ...state.items },
+    roots: [...state.roots],
+  };
+
+  for (const [key, value] of Object.entries(next.items)) {
+    next.items[key] = { ...value, children: [...value.children] };
+  }
+
+  const current = next.items[nodeId];
+  const parentId = event.parentId ?? current?.parentId ?? null;
+  const status: RuntimeNodeStatus =
+    event.type?.includes("failed")
+      ? "failed"
+      : event.type?.includes("finished") ||
+          event.type?.includes("completed") ||
+          event.type?.includes("stopped")
+        ? "completed"
+        : "running";
+
+  next.items[nodeId] = {
+    id: nodeId,
+    parentId,
+    kind: runtimeKindFromEvent(event),
+    title: runtimeTitleFromEvent(event, current),
+    subtitle: runtimeSubtitleFromEvent(event, current),
+    detail: event.detail ?? current?.detail,
+    status,
+    children: current?.children ? [...current.children] : [],
+    threadId: event.threadId ?? current?.threadId,
+    depth: event.depth ?? current?.depth,
+    stepIndex: event.stepIndex ?? current?.stepIndex,
+    totalSteps: event.totalSteps ?? current?.totalSteps,
+    label: event.label ?? current?.label,
+    stepType: event.stepType ?? event.step?.type ?? current?.stepType,
+    error: event.detail && status === "failed" ? event.detail : current?.error,
+    updatedAt: event.timestamp ?? new Date().toISOString(),
+  };
+
+  attachRuntimeNode(next, nodeId, parentId);
+  return next;
+}
+
 // Image Preview Component that handles both Base64 and Local paths
 function ImagePreview({ filePath }: { filePath?: string }) {
   const [src, setSrc] = useState<string>("");
@@ -2853,6 +3016,7 @@ function App() {
   const [failedStepIdx, setFailedStepIdx] = useState<number | null>(null);
   const [stepErrors, setStepErrors] = useState<Record<number, string>>({});
   const [debugOcrImage, setDebugOcrImage] = useState<string | null>(null);
+  const [runtimeState, setRuntimeState] = useState<RuntimeState>(emptyRuntimeState);
 
   const [workflowText, setWorkflowText] = useState(sampleJson);
   const [loadedPath, setLoadedPath] = useState<string>("");
@@ -2944,12 +3108,6 @@ function App() {
       cleanupLog = desktopApi.onLog((logLine) => {
         setLogs((current) => [logLine, ...current]);
 
-        const match = logLine.match(/Step (\d+)\/\d+:/);
-        if (match) {
-          const stepIdx = parseInt(match[1], 10) - 1;
-          setCurrentStepIdx(stepIdx);
-        }
-
         const isErrorSignal =
           logLine.includes("ERROR:") ||
           logLine.includes("Traceback") ||
@@ -3007,9 +3165,40 @@ function App() {
       });
     }
 
+    let cleanupEvent = () => {};
+    if (desktopApi.onEvent) {
+      cleanupEvent = desktopApi.onEvent((payload) => {
+        setRuntimeState((current) => reduceRuntimeEvent(current, payload));
+
+        if (
+          payload.type === "step_started" &&
+          payload.label === "start" &&
+          payload.depth === 0 &&
+          typeof payload.stepIndex === "number"
+        ) {
+          setCurrentStepIdx(payload.stepIndex - 1);
+        }
+
+        if (
+          payload.type === "step_failed" &&
+          payload.label === "start" &&
+          payload.depth === 0 &&
+          typeof payload.stepIndex === "number"
+        ) {
+          const failedIndex = payload.stepIndex - 1;
+          setFailedStepIdx(failedIndex);
+          setStepErrors((prev) => ({
+            ...prev,
+            [failedIndex]: payload.detail || "Bước này gặp sự cố.",
+          }));
+        }
+      });
+    }
+
     return () => {
       cleanupStatus();
       cleanupLog();
+      cleanupEvent();
     };
   }, []);
 
@@ -3109,6 +3298,46 @@ function App() {
   }
 
   const workflow = parsed.ok ? parsed.value : null;
+  const runtimeRoots = runtimeState.roots.filter((id) => runtimeState.items[id]);
+  const activeRuntimeNodes = Object.values(runtimeState.items)
+    .filter((node) => node.status === "running")
+    .sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+
+  function renderRuntimeNode(nodeId: string, level = 0): React.ReactNode {
+    const node = runtimeState.items[nodeId];
+    if (!node) return null;
+
+    return (
+      <div key={nodeId} className={`runtime-node runtime-${node.status}`}>
+        <div className="runtime-node-row" style={{ paddingLeft: `${level * 16}px` }}>
+          <span className={`runtime-node-dot ${node.status}`}></span>
+          <div className="runtime-node-content">
+            <div className="runtime-node-title-row">
+              <strong>{node.title}</strong>
+              <span className="runtime-node-kind">{node.kind}</span>
+              {typeof node.stepIndex === "number" && typeof node.totalSteps === "number" && (
+                <span className="runtime-node-meta">
+                  {node.stepIndex}/{node.totalSteps}
+                </span>
+              )}
+              {node.threadId && <span className="runtime-node-meta">T{node.threadId}</span>}
+            </div>
+            {node.subtitle && <div className="runtime-node-subtitle">{node.subtitle}</div>}
+            {node.detail && (
+              <div className={`runtime-node-detail ${node.status === "failed" ? "error" : ""}`}>
+                {node.detail}
+              </div>
+            )}
+          </div>
+        </div>
+        {node.children.length > 0 && (
+          <div className="runtime-node-children">
+            {node.children.map((childId) => renderRuntimeNode(childId, level + 1))}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   function updateSettings<K extends keyof Workflow["settings"]>(
     field: K,
@@ -3496,6 +3725,7 @@ function App() {
     setFailedStepIdx(null);
     setStepErrors({});
     setDebugOcrImage(null);
+    setRuntimeState(emptyRuntimeState);
     setStatus("Đang chạy tự động...");
     setLogs((current) => [
       `Trình chạy bắt đầu lúc ${new Date().toLocaleTimeString()}.`,
@@ -4505,6 +4735,40 @@ function App() {
                             : "Tắt lặp"}
                         </span>
                       </div>
+                    </div>
+                    <div className="runtime-section">
+                      <div className="runtime-section-header">
+                        <strong>Runtime workflow</strong>
+                        <span>
+                          {activeRuntimeNodes.length > 0
+                            ? `${activeRuntimeNodes.length} tác vụ đang hoạt động`
+                            : "Chưa có tác vụ đang chạy"}
+                        </span>
+                      </div>
+                      {activeRuntimeNodes.length > 0 && (
+                        <div className="runtime-active-list">
+                          {activeRuntimeNodes.map((node) => (
+                            <div key={`active-${node.id}`} className={`runtime-active-card ${node.kind}`}>
+                              <div className="runtime-active-title">
+                                <strong>{node.title}</strong>
+                                <span>{node.kind}</span>
+                              </div>
+                              <div className="runtime-active-detail">
+                                {node.detail || node.subtitle || "Đang xử lý..."}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {runtimeRoots.length > 0 ? (
+                        <div className="runtime-tree">
+                          {runtimeRoots.map((nodeId) => renderRuntimeNode(nodeId))}
+                        </div>
+                      ) : (
+                        <div className="runtime-empty">
+                          Chạy workflow để xem flow chính, flow con, check interval và wait time theo thời gian thực.
+                        </div>
+                      )}
                     </div>
                     <div
                       style={{

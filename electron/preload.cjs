@@ -27,5 +27,10 @@ contextBridge.exposeInMainWorld("desktopApi", {
     ipcRenderer.on("workflow-log", subscription);
     return () => ipcRenderer.removeListener("workflow-log", subscription);
   },
+  onEvent: (callback) => {
+    const subscription = (_event, payload) => callback(payload);
+    ipcRenderer.on("workflow-event", subscription);
+    return () => ipcRenderer.removeListener("workflow-event", subscription);
+  },
   captureWindowLayout: () => ipcRenderer.invoke("windows:capture-layout")
 });

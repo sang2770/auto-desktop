@@ -267,6 +267,7 @@ declare global {
       captureRegion: () => Promise<{ x: number; y: number; width: number; height: number; base64: string } | null>;
       onStatusChange?: (callback: (status: "running" | "paused") => void) => () => void;
       onLog?: (callback: (log: string) => void) => () => void;
+      onEvent?: (callback: (payload: any) => void) => () => void;
       captureWindowLayout?: () => Promise<Array<{
         title: string;
         x: number;

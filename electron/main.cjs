@@ -336,6 +336,14 @@ ipcMain.handle("runner:start", async (event, payload) => {
       lineAccumulator = lines.pop();
 
       for (const line of lines) {
+        if (line.startsWith("[EVENT]")) {
+          try {
+            webContents.send("workflow-event", JSON.parse(line.slice(7)));
+          } catch (error) {
+            webContents.send("workflow-log", `[event-parse-error] ${line}`);
+          }
+          continue;
+        }
         if (line.includes("[STATUS] PAUSED")) {
           webContents.send("workflow-status", "paused");
         } else if (line.includes("[STATUS] RESUMED")) {
@@ -371,12 +379,20 @@ ipcMain.handle("runner:start", async (event, payload) => {
 
       // Flush remaining data in accumulators
       if (lineAccumulator) {
+        if (lineAccumulator.startsWith("[EVENT]")) {
+          try {
+            webContents.send("workflow-event", JSON.parse(lineAccumulator.slice(7)));
+          } catch (error) {
+            webContents.send("workflow-log", `[event-parse-error] ${lineAccumulator}`);
+          }
+        } else {
         if (lineAccumulator.includes("[STATUS] PAUSED")) {
           webContents.send("workflow-status", "paused");
         } else if (lineAccumulator.includes("[STATUS] RESUMED")) {
           webContents.send("workflow-status", "running");
         }
         webContents.send("workflow-log", lineAccumulator);
+        }
       }
       if (stderrAccumulator) {
         webContents.send("workflow-log", `[stderr] ${stderrAccumulator}`);

@@ -8,6 +8,8 @@ import subprocess
 import sys
 import time
 import traceback
+import io
+import base64
 from datetime import datetime
 from typing import Any
 from typing import cast
@@ -47,6 +49,10 @@ runner_clicking = False
 abort_requested = False
 cumulative_revenue = 0.0
 workflow_variables = {}
+_event_counter = 0
+_event_counter_lock = threading.Lock()
+_context_local = threading.local()
+_image_variant_cache: dict[str, list[tuple[str, Any, bool]]] = {}
 
 def cleanup_hook():
     global mouse_hook
@@ -123,6 +129,7 @@ def check_pause_and_wait():
     if user_input_detected or is_currently_paused:
         if not is_currently_paused:
             is_currently_paused = True
+            emit_event("runner_paused", reason="user_mouse_activity")
             log("[STATUS] PAUSED")
             log(f"Workflow paused due to user mouse activity. Waiting for {int(inactivity_threshold)}s of inactivity...")
             
@@ -142,17 +149,44 @@ def check_pause_and_wait():
             time.sleep(0.1)
             
         is_currently_paused = False
+        emit_event("runner_resumed", reason="mouse_inactive")
         log("[STATUS] RESUMED")
         log(f"No user mouse activity detected for {int(inactivity_threshold)}s. Resuming workflow...")
 
 
-def wait_with_pause(seconds: float, *, abortable: bool = False) -> None:
+def wait_with_pause(
+    seconds: float,
+    *,
+    abortable: bool = False,
+    label: str | None = None,
+    stop_event: threading.Event | None = None,
+) -> None:
     global abort_requested
-    remaining = max(0.0, float(seconds))
+    total = max(0.0, float(seconds))
+    remaining = total
+    last_progress_marker: float | None = None
     while remaining > 0:
         if abortable and abort_requested:
             log("Wait interrupted by abort request.")
             return
+        if stop_event is not None and stop_event.is_set():
+            return
+
+        context = current_context()
+        if context is not None and total > 0:
+            remaining_marker = round(remaining, 1 if total >= 1 else 2)
+            if remaining_marker != last_progress_marker:
+                emit_event(
+                    "task_progress",
+                    taskId=context["id"],
+                    taskKind=context["kind"],
+                    detail=label or f"Waiting {remaining_marker}s",
+                    phase="waiting",
+                    totalSec=round(total, 2),
+                    remainingSec=remaining_marker,
+                )
+                last_progress_marker = remaining_marker
+
         check_pause_and_wait()
         chunk = min(0.1, remaining)
         time.sleep(chunk)
@@ -299,6 +333,97 @@ if hasattr(sys.stderr, "reconfigure"):
 
 def log(message: str) -> None:
     print(f"[{datetime.now().isoformat(timespec='seconds')}] {message}", flush=True)
+
+
+def next_event_id(prefix: str) -> str:
+    global _event_counter
+    with _event_counter_lock:
+        _event_counter += 1
+        return f"{prefix}-{_event_counter}"
+
+
+def get_context_stack() -> list[dict[str, Any]]:
+    stack = getattr(_context_local, "stack", None)
+    if stack is None:
+        stack = []
+        _context_local.stack = stack
+    return stack
+
+
+def current_context() -> dict[str, Any] | None:
+    stack = get_context_stack()
+    return stack[-1] if stack else None
+
+
+def push_context(context: dict[str, Any]) -> None:
+    get_context_stack().append(context)
+
+
+def pop_context(expected_id: str | None = None) -> dict[str, Any] | None:
+    stack = get_context_stack()
+    if not stack:
+        return None
+    if expected_id is None or stack[-1].get("id") == expected_id:
+        return stack.pop()
+    for idx in range(len(stack) - 1, -1, -1):
+        if stack[idx].get("id") == expected_id:
+            return stack.pop(idx)
+    return None
+
+
+def emit_event(event_type: str, **payload: Any) -> None:
+    event_payload = {
+        "type": event_type,
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "threadId": threading.get_ident(),
+        **payload,
+    }
+    print(f"[EVENT]{json.dumps(event_payload, ensure_ascii=False)}", flush=True)
+
+
+def summarize_step(step: dict[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "name": step.get("name", ""),
+        "type": step.get("type", ""),
+    }
+    for key in (
+        "clickType",
+        "image",
+        "text",
+        "workflowPath",
+        "thenWorkflowPath",
+        "elseWorkflowPath",
+        "intervalId",
+        "intervalSec",
+        "actionWorkflowPath",
+        "stopConditionType",
+        "stopImage",
+        "stopText",
+        "timeoutMs",
+        "ms",
+        "waitMs",
+        "conditionType",
+        "command",
+        "key",
+        "amount",
+        "variableName",
+        "operator",
+        "value",
+    ):
+        if key in step and step.get(key) not in (None, ""):
+            summary[key] = step.get(key)
+    return summary
+
+
+def build_context(kind: str, title: str, **payload: Any) -> dict[str, Any]:
+    context = {
+        "id": payload.pop("id", next_event_id(kind)),
+        "kind": kind,
+        "title": title,
+        "parentId": payload.pop("parentId", current_context().get("id") if current_context() else None),
+        **payload,
+    }
+    return context
 
 
 _actual_scale = None
@@ -449,6 +574,38 @@ def to_screen_int(value: Any) -> int:
     return int(value)
 
 
+def _decode_data_url_image(image: str) -> bytes:
+    _, _, encoded = image.partition("base64,")
+    if not encoded:
+        raise ValueError("Invalid data URL image payload.")
+    return base64.b64decode(encoded)
+
+
+def load_image_variants(image: str) -> list[tuple[str, Any, bool]]:
+    cached = _image_variant_cache.get(image)
+    if cached is not None:
+        return cached
+
+    from PIL import Image, ImageOps
+
+    if image.startswith("data:"):
+        base_img = Image.open(io.BytesIO(_decode_data_url_image(image)))
+    else:
+        base_img = Image.open(image)
+
+    base_rgba = base_img.convert("RGBA")
+    white_background = Image.new("RGBA", base_rgba.size, (255, 255, 255, 255))
+    composited = Image.alpha_composite(white_background, base_rgba).convert("RGB")
+    grayscale = ImageOps.grayscale(composited)
+
+    variants: list[tuple[str, Any, bool]] = [
+        ("rgb", composited, False),
+        ("grayscale", grayscale, True),
+    ]
+    _image_variant_cache[image] = variants
+    return variants
+
+
 def get_mouse_position(pyautogui: Any | None = None) -> tuple[int, int] | None:
     try:
         if pyautogui is None:
@@ -504,21 +661,56 @@ def safe_locate_on_screen(
     region: list[int] | None = None,
 ) -> tuple[Any | None, str | None]:
     try:
+        from PIL import ImageOps
+
         screenshot = take_screenshot(region)
-        match = pyautogui.locate(image, screenshot, confidence=confidence)
-        
-        if match and region:
-            try:
-                from pyautogui import Box
-            except ImportError:
-                from collections import namedtuple
-                Box = namedtuple('Box', 'left top width height')
-            
-            left = match[0] + int(region[0])
-            top = match[1] + int(region[1])
-            return Box(left, top, match[2], match[3]), None
-            
-        return match, None
+        screenshot_variants = [
+            ("rgb", screenshot, False),
+            ("grayscale", ImageOps.grayscale(screenshot), True),
+        ]
+        template_variants = load_image_variants(image)
+        confidence_levels = [float(confidence)]
+        fallback_confidence = round(max(0.6, float(confidence) - 0.05), 2)
+        if fallback_confidence < confidence:
+            confidence_levels.append(fallback_confidence)
+
+        for confidence_level in confidence_levels:
+            for template_name, template_variant, template_grayscale in template_variants:
+                for screenshot_name, screenshot_variant, screenshot_grayscale in screenshot_variants:
+                    grayscale = template_grayscale or screenshot_grayscale
+                    match = pyautogui.locate(
+                        template_variant,
+                        screenshot_variant,
+                        confidence=confidence_level,
+                        grayscale=grayscale,
+                    )
+
+                    if match:
+                        if (
+                            confidence_level != confidence
+                            or template_name != "rgb"
+                            or screenshot_name != "rgb"
+                        ):
+                            log(
+                                "Image locate fallback matched "
+                                f"templateVariant={template_name} screenshotVariant={screenshot_name} "
+                                f"confidence={confidence_level}"
+                            )
+
+                        if region:
+                            try:
+                                from pyautogui import Box
+                            except ImportError:
+                                from collections import namedtuple
+                                Box = namedtuple('Box', 'left top width height')
+
+                            left = match[0] + int(region[0])
+                            top = match[1] + int(region[1])
+                            return Box(left, top, match[2], match[3]), None
+
+                        return match, None
+
+        return None, None
     except Exception as error:
         error_name = type(error).__name__
         if error_name in {"ImageNotFoundException"}:
@@ -1251,7 +1443,7 @@ def step_scroll(step: dict[str, Any], dry_run: bool) -> None:
 def step_wait(step: dict[str, Any]) -> None:
     ms = step["ms"]
     log(f"Waiting {ms} ms")
-    wait_with_pause(ms / 1000.0, abortable=True)
+    wait_with_pause(ms / 1000.0, abortable=True, label=f"Chờ {round(ms / 1000.0, 2)}s")
 
 
 def step_wait_for_image(step: dict[str, Any], dry_run: bool) -> None:
@@ -1272,11 +1464,27 @@ def step_wait_for_image(step: dict[str, Any], dry_run: bool) -> None:
 
     start = time.time()
     last_locate_error: str | None = None
+    last_reported_second: int | None = None
     while time.time() - start < timeout / 1000:
         if abort_requested:
             log("Wait for image interrupted by abort request.")
             return
         check_pause_and_wait()
+        elapsed = time.time() - start
+        elapsed_second = int(elapsed)
+        if elapsed_second != last_reported_second:
+            context = current_context()
+            if context is not None:
+                emit_event(
+                    "task_progress",
+                    taskId=context["id"],
+                    taskKind=context["kind"],
+                    detail=f"Tìm hình ảnh {os.path.basename(image) or image}",
+                    phase="searching_image",
+                    elapsedSec=round(elapsed, 1),
+                    timeoutSec=round(timeout / 1000.0, 1),
+                )
+            last_reported_second = elapsed_second
         match, locate_error = safe_locate_on_screen(pyautogui, image, confidence=confidence, region=region)
         if locate_error:
             last_locate_error = locate_error
@@ -1309,11 +1517,27 @@ def step_check_text(step: dict[str, Any], dry_run: bool) -> None:
 
     start = time.time()
     last_extracted = ""
+    last_reported_second: int | None = None
     while time.time() - start < timeout / 1000:
         if abort_requested:
             log("Check text interrupted by abort request.")
             return
         check_pause_and_wait()
+        elapsed = time.time() - start
+        elapsed_second = int(elapsed)
+        if elapsed_second != last_reported_second:
+            context = current_context()
+            if context is not None:
+                emit_event(
+                    "task_progress",
+                    taskId=context["id"],
+                    taskKind=context["kind"],
+                    detail=f"Kiểm tra chữ '{text}'",
+                    phase="checking_text",
+                    elapsedSec=round(elapsed, 1),
+                    timeoutSec=round(timeout / 1000.0, 1),
+                )
+            last_reported_second = elapsed_second
         log(f"Region: {region}")
         extracted = extract_text_from_screen(
             region=region,
@@ -1631,7 +1855,18 @@ def step_check_interval(step: dict[str, Any], dry_run: bool) -> None:
     if not interval_id:
         log("No intervalId specified. Skipping check_interval step.")
         return
-        
+
+    parent_context = current_context()
+    interval_context = build_context(
+        "interval",
+        f"Interval {interval_id}",
+        parentId=parent_context["id"] if parent_context else None,
+        intervalId=interval_id,
+        intervalSec=float(step.get("intervalSec", 5)),
+        actionWorkflowPath=step.get("actionWorkflowPath"),
+        stopConditionType=step.get("stopConditionType"),
+    )
+
     with intervals_lock:
         if interval_id in active_intervals:
             log(f"Interval {interval_id} is already running. Stopping it first.")
@@ -1641,16 +1876,23 @@ def step_check_interval(step: dict[str, Any], dry_run: bool) -> None:
         stop_event = threading.Event()
         t = threading.Thread(
             target=interval_worker,
-            args=(interval_id, step, dry_run, stop_event),
+            args=(interval_id, step, dry_run, stop_event, interval_context),
             daemon=True
         )
         active_intervals[interval_id] = {
             "thread": t,
-            "stop_event": stop_event
+            "stop_event": stop_event,
+            "event_id": interval_context["id"],
         }
         t.start()
 
-def interval_worker(interval_id: str, step: dict[str, Any], dry_run: bool, stop_event: threading.Event) -> None:
+def interval_worker(
+    interval_id: str,
+    step: dict[str, Any],
+    dry_run: bool,
+    stop_event: threading.Event,
+    interval_context: dict[str, Any],
+) -> None:
     interval_sec = float(step.get("intervalSec", 5))
     action_workflow_path = resolve_workflow_path(step.get("actionWorkflowPath", "")) if step.get("actionWorkflowPath") else None
     
@@ -1659,68 +1901,105 @@ def interval_worker(interval_id: str, step: dict[str, Any], dry_run: bool, stop_
     stop_confidence = float(step.get("stopConfidence", 0.8))
     stop_text = step.get("stopText")
     stop_region = step.get("stopRegion")
-    
+
+    push_context(interval_context)
+    emit_event("interval_started", **interval_context)
     log(f"[Interval {interval_id}] Worker thread started. Interval: {interval_sec}s")
-    
-    while not stop_event.is_set():
-        condition_met = False
-        if stop_cond_type == "image" and stop_image:
-            if dry_run:
-                log(f"[Interval {interval_id}] DRY RUN stop condition check for image: {stop_image}")
-                condition_met = True
-            else:
-                try:
-                    import pyautogui
-                    with gui_lock:
-                        match, _ = safe_locate_on_screen(pyautogui, stop_image, confidence=stop_confidence, region=stop_region)
-                    condition_met = match is not None
-                except Exception as err:
-                    log(f"[Interval {interval_id}] Error checking stop image: {err}")
-        elif stop_cond_type == "text" and stop_text:
-            if dry_run:
-                log(f"[Interval {interval_id}] DRY RUN stop condition check for text: '{stop_text}'")
-                condition_met = True
-            else:
-                try:
-                    import pyautogui
-                    import pytesseract
-                    with gui_lock:
-                        screenshot = take_screenshot(stop_region)
-                    try:
-                        screenshot.save("debug_ocr_region.png")
-                        log("Saved OCR region screenshot to debug_ocr_region.png")
-                    except Exception as e:
-                        log(f"Failed to save debug OCR screenshot: {e}")
-                    extracted = pytesseract.image_to_string(screenshot)
-                    condition_met = stop_text.lower() in extracted.lower()
-                except Exception as err:
-                    log(f"[Interval {interval_id}] Error checking stop text: {err}")
-                
-        if condition_met:
-            log(f"[Interval {interval_id}] Stop condition met ({stop_cond_type}). Clearing interval.")
-            break
-            
-        if action_workflow_path:
-            log(f"[Interval {interval_id}] Triggering sub-workflow: {action_workflow_path}")
-            try:
-                if os.path.exists(action_workflow_path):
-                    step_run_workflow({"workflowPath": action_workflow_path}, dry_run, depth=0)
+
+    try:
+        iteration = 0
+        while not stop_event.is_set():
+            iteration += 1
+            emit_event(
+                "task_progress",
+                taskId=interval_context["id"],
+                taskKind="interval",
+                detail=f"Kiểm tra chu kỳ lần {iteration}",
+                phase="checking_interval",
+                iteration=iteration,
+                intervalId=interval_id,
+            )
+
+            condition_met = False
+            if stop_cond_type == "image" and stop_image:
+                if dry_run:
+                    log(f"[Interval {interval_id}] DRY RUN stop condition check for image: {stop_image}")
+                    condition_met = True
                 else:
-                    log(f"[Interval {interval_id}] Action workflow path does not exist: {action_workflow_path}")
-            except Exception as err:
-                log(f"[Interval {interval_id}] Error executing action workflow: {err}")
-                
-        sleep_start = time.time()
-        while time.time() - sleep_start < interval_sec:
-            check_pause_and_wait()
-            if stop_event.is_set():
+                    try:
+                        import pyautogui
+                        with gui_lock:
+                            match, _ = safe_locate_on_screen(pyautogui, stop_image, confidence=stop_confidence, region=stop_region)
+                        condition_met = match is not None
+                    except Exception as err:
+                        log(f"[Interval {interval_id}] Error checking stop image: {err}")
+            elif stop_cond_type == "text" and stop_text:
+                if dry_run:
+                    log(f"[Interval {interval_id}] DRY RUN stop condition check for text: '{stop_text}'")
+                    condition_met = True
+                else:
+                    try:
+                        import pyautogui
+                        import pytesseract
+                        with gui_lock:
+                            screenshot = take_screenshot(stop_region)
+                        try:
+                            screenshot.save("debug_ocr_region.png")
+                            log("Saved OCR region screenshot to debug_ocr_region.png")
+                        except Exception as e:
+                            log(f"Failed to save debug OCR screenshot: {e}")
+                        extracted = pytesseract.image_to_string(screenshot)
+                        condition_met = stop_text.lower() in extracted.lower()
+                    except Exception as err:
+                        log(f"[Interval {interval_id}] Error checking stop text: {err}")
+
+            if condition_met:
+                emit_event(
+                    "interval_stopped",
+                    id=interval_context["id"],
+                    detail=f"Dừng vì thỏa điều kiện {stop_cond_type or 'stop'}",
+                    reason="condition_met",
+                )
+                log(f"[Interval {interval_id}] Stop condition met ({stop_cond_type}). Clearing interval.")
                 break
-            time.sleep(0.1)
-            
-    with intervals_lock:
-        if interval_id in active_intervals:
-            del active_intervals[interval_id]
-    log(f"[Interval {interval_id}] Worker thread stopped.")
+
+            if action_workflow_path:
+                emit_event(
+                    "task_progress",
+                    taskId=interval_context["id"],
+                    taskKind="interval",
+                    detail=f"Chạy workflow con {os.path.basename(action_workflow_path)}",
+                    phase="running_sub_workflow",
+                    intervalId=interval_id,
+                )
+                log(f"[Interval {interval_id}] Triggering sub-workflow: {action_workflow_path}")
+                try:
+                    if os.path.exists(action_workflow_path):
+                        step_run_workflow({"workflowPath": action_workflow_path}, dry_run, depth=0)
+                    else:
+                        log(f"[Interval {interval_id}] Action workflow path does not exist: {action_workflow_path}")
+                except Exception as err:
+                    log(f"[Interval {interval_id}] Error executing action workflow: {err}")
+
+            wait_with_pause(
+                interval_sec,
+                label=f"Chờ {round(interval_sec, 2)}s trước lần kiểm tra tiếp theo",
+                stop_event=stop_event,
+            )
+
+        if stop_event.is_set():
+            emit_event(
+                "interval_stopped",
+                id=interval_context["id"],
+                detail="Đã dừng theo yêu cầu",
+                reason="stop_requested",
+            )
+    finally:
+        with intervals_lock:
+            if interval_id in active_intervals:
+                del active_intervals[interval_id]
+        pop_context(interval_context["id"])
+        log(f"[Interval {interval_id}] Worker thread stopped.")
 
 def step_clear_interval(step: dict[str, Any]) -> None:
     interval_id = step.get("intervalId")
@@ -1874,67 +2153,121 @@ def step_conditional_variable(step: dict[str, Any], dry_run: bool, depth: int) -
 
 def execute_step_list(steps: list[dict[str, Any]], dry_run: bool, label: str, step_delay: float = 0.0, depth: int = 0) -> None:
     global abort_requested
+    sequence_context = build_context(
+        "sequence",
+        f"Sequence: {label}",
+        label=label,
+        depth=depth,
+        totalSteps=len(steps),
+    )
+    push_context(sequence_context)
+    emit_event("sequence_started", **sequence_context)
     log(f"Running {label} sequence with {len(steps)} step(s)")
-    for index, step in enumerate(steps, start=1):
-        if abort_requested:
-            log("Execution aborted due to background signal.")
-            break
-        check_pause_and_wait()
-        step_type = step["type"]
-        log(f"Step {index}/{len(steps)}: {step.get('name', step_type)} [{step_type}]")
+    try:
+        for index, step in enumerate(steps, start=1):
+            if abort_requested:
+                log("Execution aborted due to background signal.")
+                break
+            check_pause_and_wait()
+            step_type = step["type"]
+            step_context = build_context(
+                "step",
+                step.get("name", step_type),
+                label=label,
+                depth=depth,
+                stepIndex=index,
+                totalSteps=len(steps),
+                stepType=step_type,
+                step=summarize_step(step),
+                sequenceId=sequence_context["id"],
+            )
+            push_context(step_context)
+            emit_event("step_started", **step_context)
+            log(f"Step {index}/{len(steps)}: {step.get('name', step_type)} [{step_type}]")
 
-        if step_type == "launch_app":
-            run_command(step["command"], dry_run)
-        elif step_type == "click":
-            with gui_lock:
-                step_click(step, dry_run)
-        elif step_type == "double_click":
-            with gui_lock:
-                step_double_click(step, dry_run)
-        elif step_type == "wait":
-            step_wait(step)
-        elif step_type == "wait_for_image":
-            with gui_lock:
-                step_wait_for_image(step, dry_run)
-        elif step_type == "check_text":
-            with gui_lock:
-                step_check_text(step, dry_run)
-        elif step_type == "conditional":
-            with gui_lock:
-                step_conditional(step, dry_run)
-        elif step_type == "run_workflow":
-            step_run_workflow(step, dry_run, depth)
-        elif step_type == "conditional_workflow":
-            step_conditional_workflow(step, dry_run, depth)
-        elif step_type == "check_interval":
-            step_check_interval(step, dry_run)
-        elif step_type == "clear_interval":
-            step_clear_interval(step)
-        elif step_type == "press_key":
-            with gui_lock:
-                step_press_key(step, dry_run)
-        elif step_type == "abort_iteration":
-            abort_requested = True
-            log("Abort iteration request set.")
-        elif step_type == "send_telegram":
-            with gui_lock:
-                step_send_telegram(step, dry_run)
-        elif step_type == "drag":
-            with gui_lock:
-                step_drag(step, dry_run)
-        elif step_type == "scroll":
-            with gui_lock:
-                step_scroll(step, dry_run)
-        elif step_type == "set_variable":
-            step_set_variable(step, dry_run)
-        elif step_type == "conditional_variable":
-            step_conditional_variable(step, dry_run, depth)
-        else:
-            raise ValueError(f"Unsupported step type: {step_type}")
+            try:
+                if step_type == "launch_app":
+                    run_command(step["command"], dry_run)
+                elif step_type == "click":
+                    with gui_lock:
+                        step_click(step, dry_run)
+                elif step_type == "double_click":
+                    with gui_lock:
+                        step_double_click(step, dry_run)
+                elif step_type == "wait":
+                    step_wait(step)
+                elif step_type == "wait_for_image":
+                    with gui_lock:
+                        step_wait_for_image(step, dry_run)
+                elif step_type == "check_text":
+                    with gui_lock:
+                        step_check_text(step, dry_run)
+                elif step_type == "conditional":
+                    with gui_lock:
+                        step_conditional(step, dry_run)
+                elif step_type == "run_workflow":
+                    step_run_workflow(step, dry_run, depth)
+                elif step_type == "conditional_workflow":
+                    step_conditional_workflow(step, dry_run, depth)
+                elif step_type == "check_interval":
+                    step_check_interval(step, dry_run)
+                elif step_type == "clear_interval":
+                    step_clear_interval(step)
+                elif step_type == "press_key":
+                    with gui_lock:
+                        step_press_key(step, dry_run)
+                elif step_type == "abort_iteration":
+                    abort_requested = True
+                    log("Abort iteration request set.")
+                elif step_type == "send_telegram":
+                    with gui_lock:
+                        step_send_telegram(step, dry_run)
+                elif step_type == "drag":
+                    with gui_lock:
+                        step_drag(step, dry_run)
+                elif step_type == "scroll":
+                    with gui_lock:
+                        step_scroll(step, dry_run)
+                elif step_type == "set_variable":
+                    step_set_variable(step, dry_run)
+                elif step_type == "conditional_variable":
+                    step_conditional_variable(step, dry_run, depth)
+                else:
+                    raise ValueError(f"Unsupported step type: {step_type}")
+                emit_event(
+                    "step_completed",
+                    id=step_context["id"],
+                    detail="Hoàn thành",
+                    stepIndex=step_context["stepIndex"],
+                    totalSteps=step_context["totalSteps"],
+                    depth=step_context["depth"],
+                    label=step_context["label"],
+                )
+            except Exception as error:
+                emit_event(
+                    "step_failed",
+                    id=step_context["id"],
+                    detail=str(error),
+                    errorType=type(error).__name__,
+                    stepIndex=step_context["stepIndex"],
+                    totalSteps=step_context["totalSteps"],
+                    depth=step_context["depth"],
+                    label=step_context["label"],
+                )
+                raise
+            finally:
+                pop_context(step_context["id"])
 
-        if step_delay > 0 and index < len(steps):
-            log(f"Waiting {step_delay}s between steps...")
-            wait_with_pause(step_delay, abortable=True)
+            if step_delay > 0 and index < len(steps):
+                log(f"Waiting {step_delay}s between steps...")
+                wait_with_pause(
+                    step_delay,
+                    abortable=True,
+                    label=f"Nghỉ {round(step_delay, 2)}s trước bước tiếp theo",
+                )
+    finally:
+        emit_event("sequence_finished", id=sequence_context["id"], detail="Sequence finished")
+        pop_context(sequence_context["id"])
 
 def step_press_key(step: dict[str, Any], dry_run: bool) -> None:
     key = step.get("key", "f5").lower()
@@ -2242,6 +2575,13 @@ def execute_workflow(workflow: dict[str, Any]) -> None:
     abort_requested = False
     cumulative_revenue = 0.0
     workflow_variables = {}
+    root_context = build_context(
+        "workflow",
+        workflow.get("name", "untitled"),
+        workflowName=workflow.get("name", "untitled"),
+    )
+    push_context(root_context)
+    emit_event("workflow_started", **root_context)
     
     if sys.platform == "win32":
         t = threading.Thread(target=mouse_listener, daemon=True)
@@ -2318,8 +2658,15 @@ def execute_workflow(workflow: dict[str, Any]) -> None:
             execute_step_list(start_steps, dry_run, "start", step_delay)
             execute_step_list(stop_steps, dry_run, "stop", step_delay)
 
+        emit_event("workflow_finished", id=root_context["id"], detail="Workflow finished successfully")
         log("Workflow finished successfully")
     except Exception as error:
+        emit_event(
+            "workflow_failed",
+            id=root_context["id"],
+            detail=str(error),
+            errorType=type(error).__name__,
+        )
         if bot_token and chat_id and report_error:
             try:
                 error_msg = f"{deviceName} ngắt kết nối vì lỗi trong quá trình flow: {error}"
@@ -2336,6 +2683,7 @@ def execute_workflow(workflow: dict[str, Any]) -> None:
                 for id_key, item in list(active_intervals.items()):
                     item["stop_event"].set()
                 active_intervals.clear()
+        pop_context(root_context["id"])
 
 
 def main() -> int:
