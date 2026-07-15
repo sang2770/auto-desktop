@@ -1996,7 +1996,7 @@ def interval_worker(
             )
     finally:
         with intervals_lock:
-            if interval_id in active_intervals:
+            if active_intervals.get(interval_id, {}).get("event_id") == interval_context["id"]:
                 del active_intervals[interval_id]
         pop_context(interval_context["id"])
         log(f"[Interval {interval_id}] Worker thread stopped.")
@@ -2648,6 +2648,14 @@ def execute_workflow(workflow: dict[str, Any]) -> None:
                 execute_step_list(start_steps, dry_run, "start", step_delay)
                 execute_step_list(stop_steps, dry_run, "stop", step_delay)
                 
+                # Cleanup active intervals at the end of each iteration
+                with intervals_lock:
+                    if active_intervals:
+                        log("Cleaning up active intervals for current iteration...")
+                        for id_key, item in list(active_intervals.items()):
+                            item["stop_event"].set()
+                        active_intervals.clear()
+
                 if times > 0 and run_count >= times:
                     log(f"Reached loop count limit ({times}). Ending workflow.")
                     break
