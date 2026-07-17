@@ -2216,6 +2216,9 @@ def execute_step_list(steps: list[dict[str, Any]], dry_run: bool, label: str, st
                 elif step_type == "press_key":
                     with gui_lock:
                         step_press_key(step, dry_run)
+                elif step_type == "paste_text":
+                    with gui_lock:
+                        step_paste_text(step, dry_run)
                 elif step_type == "abort_iteration":
                     abort_requested = True
                     log("Abort iteration request set.")
@@ -2268,6 +2271,93 @@ def execute_step_list(steps: list[dict[str, Any]], dry_run: bool, label: str, st
     finally:
         emit_event("sequence_finished", id=sequence_context["id"], detail="Sequence finished")
         pop_context(sequence_context["id"])
+
+def set_clipboard_text(text: str) -> None:
+    if sys.platform == "win32":
+        try:
+            import win32clipboard
+            import win32con
+            win32clipboard.OpenClipboard()
+            try:
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
+            finally:
+                win32clipboard.CloseClipboard()
+            return
+        except Exception as e:
+            log(f"win32clipboard failed: {e}. Trying fallback...")
+            
+    # Fallback to pyperclip or standard tools if win32clipboard fails or on other OS
+    try:
+        import pyperclip
+        pyperclip.copy(text)
+    except Exception as e:
+        log(f"Clipboard copy fallback failed: {e}")
+
+def step_paste_text(step: dict[str, Any], dry_run: bool) -> None:
+    delay_before = float(step.get("delayBeforeSec", 0))
+    if delay_before > 0:
+        log(f"Waiting {delay_before}s before pasting...")
+        wait_with_pause(delay_before, abortable=True)
+
+    text = step.get("text", "")
+    
+    # Replace variable templates
+    global workflow_variables
+    for var_name, var_val in list(workflow_variables.items()):
+        text = text.replace(f"{{{var_name}}}", str(var_val))
+
+    x_phys = step.get("x")
+    y_phys = step.get("y")
+    clear_before = step.get("clearBefore", False)
+
+    if dry_run:
+        if x_phys is not None and y_phys is not None:
+            log(f"DRY RUN click at ({x_phys}, {y_phys}), clear={clear_before}, and paste: '{text}'")
+        else:
+            log(f"DRY RUN clear={clear_before} and paste: '{text}'")
+    else:
+        try:
+            import pyautogui
+        except ImportError as error:
+            raise RuntimeError("pyautogui is required for paste_text step.") from error
+
+        # 1. Focus input (optional coordinate click)
+        if x_phys is not None and y_phys is not None:
+            scale = get_actual_scale()
+            x = x_phys / scale
+            y = y_phys / scale
+            highlight_coordinate(x, y)
+            log(f"Clicking at ({int(x)}, {int(y)}) to focus input before pasting...")
+            perform_click(pyautogui, x, y)
+            time.sleep(0.2)
+
+        # 2. Clear input if requested
+        if clear_before:
+            log("Clearing input text (select all + backspace)...")
+            if sys.platform == "darwin":
+                pyautogui.hotkey("command", "a")
+            else:
+                pyautogui.hotkey("ctrl", "a")
+            time.sleep(0.1)
+            pyautogui.press("backspace")
+            time.sleep(0.1)
+
+        # 3. Copy to clipboard
+        log(f"Copying to clipboard and pasting text: '{text}'")
+        set_clipboard_text(text)
+        time.sleep(0.1)
+
+        # 4. Paste
+        if sys.platform == "darwin":
+            pyautogui.hotkey("command", "v")
+        else:
+            pyautogui.hotkey("ctrl", "v")
+
+    delay_after = float(step.get("delayAfterSec", 0))
+    if delay_after > 0:
+        log(f"Waiting {delay_after}s after pasting...")
+        wait_with_pause(delay_after, abortable=True)
 
 def step_press_key(step: dict[str, Any], dry_run: bool) -> None:
     key = step.get("key", "f5").lower()

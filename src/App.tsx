@@ -210,6 +210,10 @@ function describeStep(step: any): string {
   if (step.type === "set_variable") return `Gán biến ${step.variableName || ""}`;
   if (step.type === "conditional_variable") return `So sánh biến ${step.variableName || ""}`;
   if (step.type === "launch_app") return step.command || "Chạy ứng dụng";
+  if (step.type === "paste_text") {
+    const hasCoords = step.x !== undefined && step.y !== undefined;
+    return `Dán chữ "${step.text || ""}"${hasCoords ? ` vào (${step.x}, ${step.y})` : ""}`;
+  }
   return step.type || "";
 }
 
@@ -577,6 +581,7 @@ function StepCard({
             {step.type === "scroll" && "Cuộn chuột"}
             {step.type === "set_variable" && "Thiết Lập Biến"}
             {step.type === "conditional_variable" && "So Sánh Biến"}
+            {step.type === "paste_text" && "Dán Chữ"}
           </span>
           <input
             type="text"
@@ -763,6 +768,15 @@ function StepCard({
                   thenWorkflowPath: "",
                   elseWorkflowPath: "",
                 });
+              } else if (newType === "paste_text") {
+                onUpdate({
+                  type: "paste_text",
+                  name: step.name,
+                  text: "",
+                  clearBefore: false,
+                  delayBeforeSec: 0,
+                  delayAfterSec: 0,
+                });
               }
             }}
           >
@@ -802,6 +816,7 @@ function StepCard({
             <option value="scroll">Cuộn chuột (Scroll)</option>
             <option value="set_variable">Thiết lập biến (Set Variable)</option>
             <option value="conditional_variable">So sánh biến (If Variable)</option>
+            <option value="paste_text">Dán chữ vào ô nhập (Paste Text)</option>
           </select>
         </div>
 
@@ -2574,6 +2589,139 @@ function StepCard({
           </>
         )}
 
+        {step.type === "paste_text" && (
+          <>
+            <div className="form-group">
+              <label>Văn bản cần dán (text)</label>
+              <input
+                type="text"
+                value={step.text ?? ""}
+                onChange={(e) =>
+                  onUpdate({ ...step, text: e.target.value } as Step)
+                }
+                placeholder="Nhập chữ cần dán (chấp nhận biến {tên_biến})"
+              />
+            </div>
+
+            <div className="form-group-checkbox" style={{ marginTop: "8px" }}>
+              <input
+                type="checkbox"
+                id={`paste-clear-${index}`}
+                checked={step.clearBefore === true}
+                onChange={(e) =>
+                  onUpdate({ ...step, clearBefore: e.target.checked } as Step)
+                }
+              />
+              <label htmlFor={`paste-clear-${index}`} style={{ marginLeft: "6px" }}>
+                Xóa chữ cũ trước khi dán (Ctrl+A & Backspace)
+              </label>
+            </div>
+
+            <div className="form-grid" style={{ marginTop: "12px" }}>
+              <div className="form-group">
+                <label>Toạ độ X click trước khi dán (Không bắt buộc)</label>
+                <input
+                  type="number"
+                  value={step.x ?? ""}
+                  onChange={(e) =>
+                    onUpdate({ ...step, x: e.target.value ? parseInt(e.target.value) : undefined } as Step)
+                  }
+                  placeholder="Bỏ qua nếu không di chuột"
+                />
+              </div>
+              <div className="form-group">
+                <label>Toạ độ Y click trước khi dán (Không bắt buộc)</label>
+                <input
+                  type="number"
+                  value={step.y ?? ""}
+                  onChange={(e) =>
+                    onUpdate({ ...step, y: e.target.value ? parseInt(e.target.value) : undefined } as Step)
+                  }
+                  placeholder="Bỏ qua nếu không di chuột"
+                />
+              </div>
+              <div
+                className="form-group"
+                style={{
+                  gridColumn: "span 2",
+                  display: "flex",
+                  gap: "8px",
+                }}
+              >
+                <div style={{ flex: 1 }}>
+                  <label>Lấy toạ độ di chuột</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCaptureTarget("single");
+                      setCoordsCountdown(3);
+                    }}
+                    disabled={coordsCountdown !== null}
+                    style={{
+                      width: "100%",
+                      marginTop: "6px",
+                      background:
+                        coordsCountdown !== null
+                          ? "#c85f1f"
+                          : "rgba(255, 255, 255, 0.08)",
+                    }}
+                  >
+                    {coordsCountdown !== null && captureTarget === "single"
+                      ? `Di chuột... (${coordsCountdown}s)`
+                      : "🔍 Di chuột lấy điểm"}
+                  </button>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <label>Vẽ khoanh vùng lấy tâm</label>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const res = await desktopApi.captureRegion();
+                      if (res) {
+                        const cx = res.x + Math.round(res.width / 2);
+                        const cy = res.y + Math.round(res.height / 2);
+                        onUpdate({ ...step, x: cx, y: cy } as Step);
+                      }
+                    }}
+                    style={{
+                      width: "100%",
+                      marginTop: "6px",
+                      background: "rgba(255, 255, 255, 0.08)",
+                    }}
+                  >
+                    🎯 Vẽ vùng (Lấy Tâm)
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="form-grid" style={{ marginTop: "12px" }}>
+              <div className="form-group">
+                <label>Chờ trước khi dán (giây)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={step.delayBeforeSec ?? 0}
+                  onChange={(e) =>
+                    onUpdate({ ...step, delayBeforeSec: parseFloat(e.target.value) || 0 } as Step)
+                  }
+                />
+              </div>
+              <div className="form-group">
+                <label>Chờ sau khi dán (giây)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={step.delayAfterSec ?? 0}
+                  onChange={(e) =>
+                    onUpdate({ ...step, delayAfterSec: parseFloat(e.target.value) || 0 } as Step)
+                  }
+                />
+              </div>
+            </div>
+          </>
+        )}
+
         {step.type === "set_variable" && (
           <>
             <div className="form-grid">
@@ -3494,6 +3642,15 @@ function App() {
         value: "3",
         thenWorkflowPath: "",
         elseWorkflowPath: "",
+      };
+    } else if (type === "paste_text") {
+      newStep = {
+        type: "paste_text",
+        name: "Dán chữ vào ô nhập",
+        text: "",
+        clearBefore: false,
+        delayBeforeSec: 0,
+        delayAfterSec: 0,
       };
     } else {
       newStep = {
@@ -4641,6 +4798,16 @@ function App() {
                         }}
                       >
                         + Nhấn Phím
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleAddStep("paste_text")}
+                        style={{
+                          background: "rgba(244, 63, 94, 0.15)",
+                          borderColor: "rgba(244, 63, 94, 0.3)",
+                        }}
+                      >
+                        + Dán Chữ
                       </button>
                       <button
                         type="button"

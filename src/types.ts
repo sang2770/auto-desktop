@@ -189,6 +189,17 @@ export type ConditionalVariableStep = {
   elseWorkflowPath?: string;
 };
 
+export type PasteTextStep = {
+  type: "paste_text";
+  name: string;
+  text: string;
+  x?: number;
+  y?: number;
+  clearBefore?: boolean;
+  delayBeforeSec?: number;
+  delayAfterSec?: number;
+};
+
 export type Step =
   | ClickStep
   | DoubleClickStep
@@ -207,7 +218,8 @@ export type Step =
   | DragStep
   | ScrollStep
   | SetVariableStep
-  | ConditionalVariableStep;
+  | ConditionalVariableStep
+  | PasteTextStep;
 
 export type Workflow = {
   name: string;
