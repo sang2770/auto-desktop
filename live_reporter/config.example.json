@@ -1,0 +1,17 @@
+{
+  "telegram_bot_token": "DIEN_BOT_TOKEN",
+  "telegram_chat_id": "DIEN_CHAT_ID",
+  "window_title_keywords": [
+    "TikTok LIVE Studio",
+    "TikTok Live Studio"
+  ],
+  "scan_interval_seconds": 15,
+  "daily_report_time": "23:55",
+  "send_empty_daily_report": false,
+  "send_screenshot": false,
+  "ocr_languages": "eng",
+  "ocr_min_confidence": 20,
+  "tesseract_cmd": "",
+  "history_limit": 500,
+  "debug_screenshots": false
+}

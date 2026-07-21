@@ -32,3 +32,8 @@ build/*
 debug_ocr_region.png
 debug_ocr_region.png
 *.pyc
+
+# TikTok LIVE reporter runtime/secrets
+live_reporter/config.json
+live_reporter/debug/
+workflows/
