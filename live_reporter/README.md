@@ -27,9 +27,8 @@ Script cài đặt sẽ:
 
 1. kiểm tra/cài dependency Python;
 2. hỏi Telegram Bot Token và Chat ID;
-3. kiểm tra OCR trên toàn bộ ảnh trong `report`;
-4. gửi một tin Telegram thử;
-5. tạo và khởi động task `AutoDesktop-TikTokLiveReporter`.
+3. gửi một tin Telegram thử;
+4. tạo và khởi động task `AutoDesktop-TikTokLiveReporter`.
 
 Token được lưu ngoài Git tại:
 
@@ -37,10 +36,10 @@ Token được lưu ngoài Git tại:
 %LOCALAPPDATA%\AutoDesktopLiveReporter\config.json
 ```
 
-Muốn gửi kèm ảnh chụp kết quả:
+Muốn gửi kèm ảnh chụp kết quả hoặc thay đổi thời gian delay sau khi quét thành công (mặc định 120s = 2 phút):
 
 ```powershell
-.\live_reporter\install-autostart.ps1 -SendScreenshot
+.\live_reporter\install-autostart.ps1 -SendScreenshot -PostSuccessDelaySeconds 120
 ```
 
 ## Chạy và kiểm tra thủ công

@@ -4,6 +4,7 @@ param(
     [string]$ChatId = "",
     [ValidatePattern('^([01]\d|2[0-3]):[0-5]\d$')]
     [string]$DailyReportTime = "23:55",
+    [int]$PostSuccessDelaySeconds = 120,
     [switch]$SendScreenshot
 )
 
@@ -35,7 +36,7 @@ if (-not (Test-Path -LiteralPath $Python) -or -not (Test-Path -LiteralPath $Pyth
     throw "Khong thay .venv. Hay chay: py -3 -m venv .venv"
 }
 
-Write-Host "[1/5] Kiem tra thu vien Python..."
+Write-Host "[1/4] Kiem tra thu vien Python..."
 & $Python -c "import PIL, pytesseract, win32gui" 2>$null
 if ($LASTEXITCODE -ne 0) {
     & $Python -m pip install -r (Join-Path $ProjectRoot "runner\requirements.txt")
@@ -44,7 +45,7 @@ if ($LASTEXITCODE -ne 0) {
     }
 }
 
-Write-Host "[2/5] Tao cau hinh rieng trong LocalAppData..."
+Write-Host "[2/4] Tao cau hinh rieng trong LocalAppData..."
 New-Item -ItemType Directory -Path $RuntimeDir -Force | Out-Null
 $TemplatePath = Join-Path $ScriptDir "config.example.json"
 $Config = Get-Content -LiteralPath $TemplatePath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -81,6 +82,7 @@ if (-not $BotToken -or -not $ChatId) {
 $Config.telegram_bot_token = $BotToken
 $Config.telegram_chat_id = $ChatId
 $Config.daily_report_time = $DailyReportTime
+$Config.post_success_delay_seconds = $PostSuccessDelaySeconds
 $Config.send_screenshot = [bool]$SendScreenshot
 
 $TesseractCandidates = @(
@@ -115,19 +117,13 @@ catch {
     Write-Warning "Khong the gioi han ACL config: $($_.Exception.Message)"
 }
 
-Write-Host "[3/5] Kiem tra OCR tren anh mau..."
-& $Python $ReporterScript --config $ConfigPath --image-dir (Join-Path $ProjectRoot "report")
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning "OCR chua nhan duoc anh mau. Task van co the cai, nhung hay xem log/README de hieu chinh."
-}
-
-Write-Host "[4/5] Gui tin nhan Telegram thu..."
+Write-Host "[3/4] Gui tin nhan Telegram thu..."
 & $Python $ReporterScript --config $ConfigPath --test-telegram
 if ($LASTEXITCODE -ne 0) {
     throw "Telegram test that bai. Kiem tra Bot Token, Chat ID va viec da nhan Start trong bot."
 }
 
-Write-Host "[5/5] Dang ky Task Scheduler khi dang nhap Windows..."
+Write-Host "[4/4] Dang ky Task Scheduler khi dang nhap Windows..."
 $Arguments = '"{0}" --config "{1}" --state "{2}" --log "{3}"' -f $ReporterScript, $ConfigPath, $StatePath, $LogPath
 $Action = New-ScheduledTaskAction -Execute $Pythonw -Argument $Arguments -WorkingDirectory $ProjectRoot
 $UserId = [Security.Principal.WindowsIdentity]::GetCurrent().Name

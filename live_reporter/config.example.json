@@ -6,6 +6,7 @@
     "TikTok Live Studio"
   ],
   "scan_interval_seconds": 15,
+  "post_success_delay_seconds": 120,
   "daily_report_time": "23:55",
   "send_empty_daily_report": false,
   "send_screenshot": false,

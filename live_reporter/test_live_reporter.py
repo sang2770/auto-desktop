@@ -1,12 +1,15 @@
 import tempfile
 import unittest
+from types import SimpleNamespace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 from live_reporter.live_reporter import (
     OCRLine,
     daily_totals,
+    extract_money_near_label,
     find_session_label,
     is_end_summary,
     load_state,
@@ -41,12 +44,97 @@ class TextParsingTests(unittest.TestCase):
         self.assertLess(selected.width, combined.width)
         self.assertEqual(selected.left, combined.left)
 
+    def test_combined_label_without_repeated_week_prefix_is_narrowed(self) -> None:
+        # Một số máy/Tesseract đọc thành "... LIVE nay Tuan nay".
+        combined = OCRLine("Tam tinh phien LIVE nay Tuan nay", 440, 534, 493, 26)
+        selected = find_session_label([combined])
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertLess(selected.right, 736)
+
+    def test_extract_money_only_from_session_column(self) -> None:
+        processed = SimpleNamespace(width=1200, height=800)
+        label = OCRLine("Tam tinh phien LIVE nay", 440, 534, 288, 26)
+        daily = OCRLine("$0.11", 442, 576, 111, 34)
+        weekly = OCRLine("$1.65", 736, 576, 157, 34)
+
+        amount = extract_money_near_label(processed, [label, weekly, daily], label, {"ocr_languages": "eng"})
+
+        self.assertEqual(amount, Decimal("0.11"))
+
+    def test_session_amount_is_lower_when_both_columns_overlap(self) -> None:
+        processed = SimpleNamespace(width=1200, height=800)
+        # Mô phỏng OCR trên máy khác trả về bbox nhãn quá rộng, khiến cả hai
+        # số tiền đều bị coi là nằm trong cùng cột.
+        label = OCRLine("Tam tinh phien LIVE nay", 440, 534, 500, 26)
+        daily = OCRLine("$0.11", 442, 576, 111, 34)
+        weekly = OCRLine("$1.65", 736, 576, 157, 34)
+
+        amount = extract_money_near_label(processed, [label, weekly, daily], label, {"ocr_languages": "eng"})
+
+        self.assertEqual(amount, Decimal("0.11"))
+
+    def test_weekly_money_is_not_fallback_when_daily_ocr_is_missing(self) -> None:
+        class ProcessedImage:
+            width = 1200
+            height = 800
+
+            def crop(self, box):
+                self.crop_box = box
+                return self
+
+        processed = ProcessedImage()
+        label = OCRLine("Tam tinh phien LIVE nay", 440, 534, 288, 26)
+        weekly = OCRLine("$1.65", 736, 576, 157, 34)
+        fake_tesseract = SimpleNamespace(image_to_string=lambda *args, **kwargs: "")
+
+        with patch.dict("sys.modules", {"pytesseract": fake_tesseract}):
+            amount = extract_money_near_label(
+                processed,
+                [label, weekly],
+                label,
+                {"ocr_languages": "eng"},
+            )
+
+        self.assertIsNone(amount)
+        self.assertEqual(processed.crop_box[2], label.right)
+
+    def test_weekly_money_is_rejected_when_combined_label_was_wide(self) -> None:
+        class ProcessedImage:
+            width = 1200
+            height = 800
+
+            def crop(self, _box):
+                return self
+
+        processed = ProcessedImage()
+        label = OCRLine("Tam tinh phien LIVE nay", 440, 534, 330, 26)
+        weekly = OCRLine("$1.65", 736, 576, 157, 34)
+
+        fake_tesseract = SimpleNamespace(image_to_string=lambda *args, **kwargs: "")
+        with patch.dict("sys.modules", {"pytesseract": fake_tesseract}):
+            amount = extract_money_near_label(processed, [label, weekly], label, {"ocr_languages": "eng"})
+
+        self.assertIsNone(amount)
+
     def test_end_summary_markers(self) -> None:
         lines = [OCRLine("Phiên LIVE đã kết thúc", 0, 0, 300, 30)]
         self.assertTrue(is_end_summary(lines, "Phiên LIVE đã kết thúc"))
         self.assertTrue(is_end_summary([], "Thdi lugng 00:26:41 Trai nghiem LIVE cua ban"))
         self.assertTrue(is_end_summary([], "Da ket thic! 21 nguoi xem"))
         self.assertFalse(is_end_summary([], "Dang phat LIVE"))
+
+
+class ConfigTests(unittest.TestCase):
+    def test_default_config_has_post_success_delay(self) -> None:
+        from live_reporter.live_reporter import DEFAULT_CONFIG, load_config
+        self.assertIn("post_success_delay_seconds", DEFAULT_CONFIG)
+        self.assertEqual(DEFAULT_CONFIG["post_success_delay_seconds"], 120)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            config = load_config(path)
+            self.assertEqual(config["post_success_delay_seconds"], 120)
 
 
 class StateTests(unittest.TestCase):

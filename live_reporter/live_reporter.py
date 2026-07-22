@@ -34,6 +34,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "telegram_chat_id": "",
     "window_title_keywords": ["TikTok LIVE Studio", "TikTok Live Studio"],
     "scan_interval_seconds": 15,
+    "post_success_delay_seconds": 120,
     "daily_report_time": "23:55",
     "send_empty_daily_report": False,
     "send_screenshot": False,
@@ -270,11 +271,24 @@ def find_session_label(lines: Iterable[OCRLine]) -> OCRLine | None:
     label = best[1]
     normalized = normalize_text(label.text)
     # Tesseract thuong ghep hai cot "phien LIVE" va "tuan nay" thanh mot line.
-    # Thu hep bbox ve cot dau de khong chon nham tong theo tuan o ben phai.
-    week_index = normalized.find("tam tinh tuan")
+    # Mot so may lai bo phan lap "tam tinh" o cot thu hai, vi vay chi tim
+    # "tuan" sau nhan phien cung phai duoc coi la moc cat cot.
+    week_markers = [
+        index
+        for marker in ("tam tinh tuan", "tuan", "week")
+        if (index := normalized.find(marker)) >= 0
+    ]
+    week_index = min(week_markers, default=-1)
     session_index = normalized.find("tam tinh phien")
-    if week_index > session_index >= 0:
-        fraction = max(0.35, min(0.75, week_index / max(len(normalized), 1)))
+    session_end = (
+        session_index + len("tam tinh phien")
+        if session_index >= 0
+        else normalized.find("phien") + len("phien")
+    )
+    if week_index >= session_end > 0:
+        # Chu OCR khong phai luc nao cung co cung do rong; cat du phong som
+        # mot chut de bbox khong lan sang so tien cua cot tuan.
+        fraction = max(0.3, min(0.58, (week_index / max(len(normalized), 1)) * 0.9))
         label = OCRLine(
             text=label.text[: max(1, int(len(label.text) * fraction))].strip(),
             left=label.left,
@@ -305,6 +319,11 @@ def parse_money(text: str, allow_bare: bool = False) -> Decimal | None:
     return value.quantize(Decimal("0.01"))
 
 
+def _horizontal_overlap_ratio(first: OCRLine, second: OCRLine) -> float:
+    overlap = max(0, min(first.right, second.right) - max(first.left, second.left))
+    return overlap / max(1, min(first.width, second.width))
+
+
 def extract_money_near_label(processed: Any, lines: list[OCRLine], label: OCRLine, config: dict[str, Any]) -> Decimal | None:
     candidates: list[tuple[float, Decimal]] = []
     for line in lines:
@@ -316,11 +335,16 @@ def extract_money_near_label(processed: Any, lines: list[OCRLine], label: OCRLin
         vertical_delta = line.top - label.bottom
         horizontal_delta = abs(line.center_x - label.center_x)
         if -label.height <= vertical_delta <= max(label.height * 5, processed.height * 0.1):
-            if horizontal_delta <= max(label.width * 0.9, processed.width * 0.12):
+            # Hai cot "phien LIVE nay" va "tuan nay" nam sat nhau. Neu OCR bo
+            # sot so o cot dau, chi dung khoang cach tam se nhan nham so tuan.
+            # Bat buoc bbox so tien phai thuc su nam trong cot cua nhan phien LIVE.
+            if _horizontal_overlap_ratio(line, label) >= 0.35:
                 candidates.append((abs(vertical_delta) * 2 + horizontal_delta, amount))
     if candidates:
-        candidates.sort(key=lambda item: item[0])
-        return candidates[0][1]
+        # Trong layout hai cot, OCR co the coi ca hai so deu nam duoi nhan
+        # phien. Doanh thu cua phien luon nho hon hoac bang tong theo tuan,
+        # nen uu tien gia tri nho nhat trong tap ung vien cung hang.
+        return min(amount for _, amount in candidates)
 
     # Fallback: OCR rieng vung ngay duoi nhan, chi cho phep ky tu tien te va chu so.
     import pytesseract  # type: ignore
@@ -330,7 +354,9 @@ def extract_money_near_label(processed: Any, lines: list[OCRLine], label: OCRLin
         (
             max(0, label.left - padding_x),
             max(0, label.bottom - 3),
-            min(processed.width, label.right + padding_x),
+            # Khong mo rong sang phai: day la noi cot "tuan nay" bat dau trong
+            # layout TikTok, va fallback chi duoc phep doc doanh thu phien/ngay.
+            min(processed.width, label.right),
             min(processed.height, label.bottom + max(label.height * 5, 80)),
         )
     )
@@ -725,12 +751,20 @@ def run_daemon(config: dict[str, Any], state_path: Path, once: bool = False) -> 
     client = TelegramClient(str(config.get("telegram_bot_token", "")), str(config.get("telegram_chat_id", "")))
     state = load_state(state_path)
     interval = max(5.0, float(config.get("scan_interval_seconds", 15)))
+    try:
+        post_success_delay = max(0.0, float(config.get("post_success_delay_seconds", 120)))
+    except (TypeError, ValueError):
+        post_success_delay = 120.0
+
     last_no_window_log = 0.0
     screen_cache: dict[int, str] = {}
     logging.info("Bat dau theo doi TikTok LIVE Studio; chu ky %.1f giay.", interval)
+    if post_success_delay > 0:
+        logging.info("Delay sau khi quet va gui thanh cong: %.1f giay.", post_success_delay)
 
     while not STOP_REQUESTED:
         now = datetime.now()
+        success_detected = False
         try:
             windows = find_tiktok_windows(config.get("window_title_keywords", []))
             if not windows and time.monotonic() - last_no_window_log > 300:
@@ -747,14 +781,21 @@ def run_daemon(config: dict[str, Any], state_path: Path, once: bool = False) -> 
                 screen_cache[hwnd] = change_key
                 if result and register_result(result, state, state_path, client, config, now):
                     logging.info("Da gui Telegram: $%s tu '%s'.", format_money(result.amount), title)
+                    success_detected = True
             if maybe_send_daily(state, state_path, client, config, now):
                 logging.info("Da gui bao cao tong ket ngay.")
         except Exception:
             logging.exception("Vong quet that bai; se thu lai.")
         if once:
             break
+
+        current_interval = interval
+        if success_detected and post_success_delay > 0:
+            logging.info("Quet va gui thanh cong phien LIVE; tam dung %.1f giay truoc lan quet tiep theo.", post_success_delay)
+            current_interval = post_success_delay
+
         # Sleep theo nhieu dot ngan de thoat nhanh khi Task Scheduler dung task.
-        deadline = time.monotonic() + interval
+        deadline = time.monotonic() + current_interval
         while not STOP_REQUESTED and time.monotonic() < deadline:
             time.sleep(min(1.0, deadline - time.monotonic()))
     logging.info("Da dung TikTok LIVE reporter.")
