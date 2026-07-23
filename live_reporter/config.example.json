@@ -1,4 +1,5 @@
 {
+  "machine_name": "",
   "telegram_bot_token": "DIEN_BOT_TOKEN",
   "telegram_chat_id": "DIEN_CHAT_ID",
   "window_title_keywords": [

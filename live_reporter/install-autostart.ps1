@@ -2,10 +2,15 @@
 param(
     [string]$BotToken = "",
     [string]$ChatId = "",
+    [alias('machine-name')]
+    [string]$MachineName = "",
     [ValidatePattern('^([01]\d|2[0-3]):[0-5]\d$')]
     [string]$DailyReportTime = "23:55",
     [int]$PostSuccessDelaySeconds = 120,
-    [switch]$SendScreenshot
+    [int]$ScanIntervalSeconds = 15,
+    [switch]$SendScreenshot,
+    [alias('reset-state')]
+    [switch]$ResetState
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,6 +24,13 @@ $StatePath = Join-Path $RuntimeDir "state.json"
 $LogPath = Join-Path $RuntimeDir "live-reporter.log"
 $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $Pythonw = Join-Path $ProjectRoot ".venv\Scripts\pythonw.exe"
+
+Write-Host "[1/6] Go ban cai cu neu co..."
+$ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($ExistingTask) {
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+}
 
 function Read-SecretText {
     param([string]$Prompt)
@@ -36,7 +48,7 @@ if (-not (Test-Path -LiteralPath $Python) -or -not (Test-Path -LiteralPath $Pyth
     throw "Khong thay .venv. Hay chay: py -3 -m venv .venv"
 }
 
-Write-Host "[1/4] Kiem tra thu vien Python..."
+Write-Host "[2/6] Kiem tra thu vien Python..."
 & $Python -c "import PIL, pytesseract, win32gui" 2>$null
 if ($LASTEXITCODE -ne 0) {
     & $Python -m pip install -r (Join-Path $ProjectRoot "runner\requirements.txt")
@@ -45,35 +57,41 @@ if ($LASTEXITCODE -ne 0) {
     }
 }
 
-Write-Host "[2/4] Tao cau hinh rieng trong LocalAppData..."
+Write-Host "[3/6] Tao moi cau hinh tu config.example.json..."
 New-Item -ItemType Directory -Path $RuntimeDir -Force | Out-Null
+if ($ResetState) {
+    Write-Host "Reset bien dem va xoa du lieu phien theo yeu cau..."
+    & $Python $ReporterScript --reset-state --state $StatePath
+}
 $TemplatePath = Join-Path $ScriptDir "config.example.json"
+if (-not (Test-Path -LiteralPath $TemplatePath)) {
+    throw "Khong tim thay file config.example.json"
+}
 $Config = Get-Content -LiteralPath $TemplatePath -Raw -Encoding UTF8 | ConvertFrom-Json
 
+# Neu da co config.json cu, giu lai Telegram Bot Token, Chat ID va MachineName neu nguoi dung khong truyen tham so
 if (Test-Path -LiteralPath $ConfigPath) {
-    $Existing = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    foreach ($Property in $Existing.PSObject.Properties) {
-        if ($Config.PSObject.Properties.Name -contains $Property.Name) {
-            $Config.$($Property.Name) = $Property.Value
+    try {
+        $Existing = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not $BotToken -and $Existing.telegram_bot_token -and $Existing.telegram_bot_token -ne "DIEN_BOT_TOKEN") {
+            $BotToken = $Existing.telegram_bot_token
         }
+        if (-not $ChatId -and $Existing.telegram_chat_id -and $Existing.telegram_chat_id -ne "DIEN_CHAT_ID") {
+            $ChatId = $Existing.telegram_chat_id
+        }
+        if (-not $MachineName -and $Existing.machine_name) {
+            $MachineName = $Existing.machine_name
+        }
+    } catch {
+        Write-Warning "Khong doc duoc config cu, se reset hoan toan tu template."
     }
 }
 
 if (-not $BotToken) {
-    if ($Config.telegram_bot_token -and $Config.telegram_bot_token -ne "DIEN_BOT_TOKEN") {
-        $BotToken = $Config.telegram_bot_token
-    }
-    else {
-        $BotToken = Read-SecretText "Nhap Telegram Bot Token"
-    }
+    $BotToken = Read-SecretText "Nhap Telegram Bot Token"
 }
 if (-not $ChatId) {
-    if ($Config.telegram_chat_id -and $Config.telegram_chat_id -ne "DIEN_CHAT_ID") {
-        $ChatId = $Config.telegram_chat_id
-    }
-    else {
-        $ChatId = Read-Host "Nhap Telegram Chat ID"
-    }
+    $ChatId = Read-Host "Nhap Telegram Chat ID"
 }
 if (-not $BotToken -or -not $ChatId) {
     throw "Bot Token va Chat ID khong duoc de trong."
@@ -81,10 +99,24 @@ if (-not $BotToken -or -not $ChatId) {
 
 $Config.telegram_bot_token = $BotToken
 $Config.telegram_chat_id = $ChatId
+if (-not $MachineName) {
+    $MachineName = $env:COMPUTERNAME
+}
+if ($Config.PSObject.Properties.Name -contains "machine_name") {
+    $Config.machine_name = $MachineName
+} else {
+    $Config | Add-Member -NotePropertyName "machine_name" -NotePropertyValue $MachineName -Force
+}
 $Config.daily_report_time = $DailyReportTime
-$Config.post_success_delay_seconds = $PostSuccessDelaySeconds
 $Config.send_screenshot = [bool]$SendScreenshot
+if ($PostSuccessDelaySeconds -gt 0) {
+    $Config.post_success_delay_seconds = $PostSuccessDelaySeconds
+}
+if ($ScanIntervalSeconds -gt 0) {
+    $Config.scan_interval_seconds = $ScanIntervalSeconds
+}
 
+Write-Host "[4/6] Tim Tesseract OCR..."
 $TesseractCandidates = @(
     (Get-Command tesseract.exe -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue),
     (Join-Path $env:ProgramFiles "Tesseract-OCR\tesseract.exe"),
@@ -117,13 +149,14 @@ catch {
     Write-Warning "Khong the gioi han ACL config: $($_.Exception.Message)"
 }
 
-Write-Host "[3/4] Gui tin nhan Telegram thu..."
+
+Write-Host "[5/6] Gui tin nhan Telegram thu..."
 & $Python $ReporterScript --config $ConfigPath --test-telegram
 if ($LASTEXITCODE -ne 0) {
     throw "Telegram test that bai. Kiem tra Bot Token, Chat ID va viec da nhan Start trong bot."
 }
 
-Write-Host "[4/4] Dang ky Task Scheduler khi dang nhap Windows..."
+Write-Host "[6/6] Dang ky Task Scheduler khi dang nhap Windows..."
 $Arguments = '"{0}" --config "{1}" --state "{2}" --log "{3}"' -f $ReporterScript, $ConfigPath, $StatePath, $LogPath
 $Action = New-ScheduledTaskAction -Execute $Pythonw -Argument $Arguments -WorkingDirectory $ProjectRoot
 $UserId = [Security.Principal.WindowsIdentity]::GetCurrent().Name

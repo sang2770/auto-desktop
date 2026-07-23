@@ -1,5 +1,11 @@
 # TikTok LIVE Reporter
 
+## Cài đặt/cập nhật một click
+
+Double-click `setup-live-reporter.cmd`. Tool sẽ tự gỡ Scheduled Task cũ, tạo lại
+`config.json` từ `config.example.json` (chỉ giữ token, chat ID và tên máy đã lưu),
+kiểm tra Telegram, đăng ký và khởi động lại reporter.
+
 Script này chạy nền trên Windows, quét cửa sổ **TikTok LIVE Studio**, nhận diện màn hình kết thúc phiên, OCR ô **Tạm tính phiên LIVE này**, rồi gửi Telegram. Mỗi ảnh kết quả chỉ được ghi nhận một lần; dữ liệu được cộng dồn và gửi thêm một bản tổng kết cuối ngày.
 
 5 ảnh trong thư mục `report` đã được dùng để thiết kế nhận diện cho cả hai bố cục TikTok hiện có. Các số tiền kỳ vọng là `$0.21`, `$0.11`, `$0.00`, `$0.54` và `$0.75`.

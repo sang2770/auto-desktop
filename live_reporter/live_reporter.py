@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import socket
 import sys
 import time
 import unicodedata
@@ -30,6 +31,7 @@ from typing import Any, Iterable
 
 APP_NAME = "AutoDesktopLiveReporter"
 DEFAULT_CONFIG: dict[str, Any] = {
+    "machine_name": "",
     "telegram_bot_token": "",
     "telegram_chat_id": "",
     "window_title_keywords": ["TikTok LIVE Studio", "TikTok Live Studio"],
@@ -97,6 +99,16 @@ class LiveResult:
         }
 
 
+def get_machine_name(config: dict[str, Any]) -> str:
+    name = str(config.get("machine_name", "")).strip()
+    if not name:
+        try:
+            name = socket.gethostname()
+        except Exception:
+            name = ""
+    return name
+
+
 def load_config(path: Path) -> dict[str, Any]:
     config = dict(DEFAULT_CONFIG)
     if path.exists():
@@ -111,6 +123,8 @@ def load_config(path: Path) -> dict[str, Any]:
         config["telegram_bot_token"] = os.environ["TELEGRAM_BOT_TOKEN"]
     if os.environ.get("TELEGRAM_CHAT_ID"):
         config["telegram_chat_id"] = os.environ["TELEGRAM_CHAT_ID"]
+    if os.environ.get("MACHINE_NAME"):
+        config["machine_name"] = os.environ["MACHINE_NAME"]
     return config
 
 
@@ -130,7 +144,12 @@ def setup_logging(log_path: Path, verbose: bool = False) -> None:
 
 
 def resolve_tesseract(configured: str) -> str:
-    candidates = [configured, shutil.which("tesseract")]
+    candidates = [
+        configured,
+        shutil.which("tesseract"),
+        "/opt/homebrew/bin/tesseract",
+        "/usr/local/bin/tesseract",
+    ]
     program_files = [os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"), os.environ.get("LOCALAPPDATA")]
     for base in program_files:
         if base:
@@ -140,7 +159,7 @@ def resolve_tesseract(configured: str) -> str:
             return str(Path(candidate))
     raise RuntimeError(
         "Khong tim thay Tesseract OCR. Cai Tesseract OCR va them vao PATH, "
-        "hoac dien duong dan tesseract.exe vao tesseract_cmd trong config."
+        "hoac dien duong dan tesseract.exe/tesseract vao tesseract_cmd trong config."
     )
 
 
@@ -278,6 +297,11 @@ def find_session_label(lines: Iterable[OCRLine]) -> OCRLine | None:
         for marker in ("tam tinh tuan", "tuan", "week")
         if (index := normalized.find(marker)) >= 0
     ]
+    # Nhan dien cac biet the OCR cua "tuan" (vi du "tudn", "twon", "tu2n")
+    week_match = re.search(r"\b(tam tinh )?t[uaow0-9]+[dn]+|\bweek\b", normalized)
+    if week_match:
+        week_markers.append(week_match.start())
+
     week_index = min(week_markers, default=-1)
     session_index = normalized.find("tam tinh phien")
     session_end = (
@@ -339,12 +363,12 @@ def extract_money_near_label(processed: Any, lines: list[OCRLine], label: OCRLin
             # sot so o cot dau, chi dung khoang cach tam se nhan nham so tuan.
             # Bat buoc bbox so tien phai thuc su nam trong cot cua nhan phien LIVE.
             if _horizontal_overlap_ratio(line, label) >= 0.35:
-                candidates.append((abs(vertical_delta) * 2 + horizontal_delta, amount))
+                candidates.append((line.left, amount))
     if candidates:
-        # Trong layout hai cot, OCR co the coi ca hai so deu nam duoi nhan
-        # phien. Doanh thu cua phien luon nho hon hoac bang tong theo tuan,
-        # nen uu tien gia tri nho nhat trong tap ung vien cung hang.
-        return min(amount for _, amount in candidates)
+        # TikTok LIVE Studio luon dat cot Phiên LIVE o BEN TRAI (toa do left nho nhat).
+        # Luon lay con so o ngoai cung ben trai, khong so sanh lon nho giua tien phien va tien tuan.
+        candidates.sort(key=lambda item: item[0])
+        return candidates[0][1]
 
     # Fallback: OCR rieng vung ngay duoi nhan, chi cho phep ky tu tien te va chu so.
     import pytesseract  # type: ignore
@@ -360,12 +384,35 @@ def extract_money_near_label(processed: Any, lines: list[OCRLine], label: OCRLin
             min(processed.height, label.bottom + max(label.height * 5, 80)),
         )
     )
-    text = pytesseract.image_to_string(
-        crop,
-        lang=str(config["ocr_languages"]),
-        config="--oem 3 --psm 7 -c tessedit_char_whitelist=$S0123456789.,",
-    )
-    return parse_money(text, allow_bare=True)
+    # Font, DPI scaling and GPU rendering differ between machines. Try several
+    # inexpensive OCR variants instead of relying on one PSM against one crop.
+    from PIL import ImageEnhance, ImageOps  # type: ignore
+
+    variants = [crop]
+    try:
+        gray = ImageOps.grayscale(crop)
+        contrasted = ImageEnhance.Contrast(ImageOps.autocontrast(gray)).enhance(2.0)
+        variants.extend(
+            [
+                contrasted,
+                contrasted.resize((contrasted.width * 2, contrasted.height * 2)),
+                contrasted.point(lambda pixel: 255 if pixel > 145 else 0),
+            ]
+        )
+    except Exception:
+        logging.debug("Khong tao duoc cac bien the OCR tien.", exc_info=True)
+
+    for variant in variants:
+        for psm in (7, 6, 11, 13):
+            text = pytesseract.image_to_string(
+                variant,
+                lang=str(config["ocr_languages"]),
+                config=f"--oem 3 --psm {psm} -c tessedit_char_whitelist=$S0123456789.,",
+            )
+            amount = parse_money(text, allow_bare=True)
+            if amount is not None:
+                return amount
+    return None
 
 
 def is_end_summary(lines: Iterable[OCRLine], raw_text: str) -> bool:
@@ -386,6 +433,44 @@ def is_end_summary(lines: Iterable[OCRLine], raw_text: str) -> bool:
         if _similarity(line_text, "da ket thuc") >= 0.72:
             return True
     return False
+
+
+def is_report_screen(lines: Iterable[OCRLine], raw_text: str) -> bool:
+    """Require several independent layout markers before accepting a report.
+
+    A TikTok window can contain dollar values and end-live wording on ordinary
+    screens. The result page consistently contains multiple statistic groups;
+    matching those groups avoids sending money found elsewhere in the window.
+    """
+    materialized = list(lines)
+    normalized = normalize_text(raw_text)
+    marker_groups = (
+        ("thoi luong", "thdi lugng", "duration"),
+        (
+            "tong so luot xem",
+            "tong so xem",
+            "luot chia se",
+            "lugt xem",
+            "lugt chia",
+            "follower moi",
+            "follower mdi",
+            "nguoi gui qua tang",
+            "ngudi gti qua tang",
+        ),
+        ("kim cuong", "kim cudng", "tam tinh tuan", "tuan nay"),
+        ("trai nghiem live", "trai nghiém live", "experience live"),
+        (
+            "ket noi",
+            "ket ndi",
+            "nhieu qua tang nhat",
+            "nhieu qua ta",
+            "thoi gian xem nhieu nhat",
+            "thoi gian xe",
+            "fan club",
+        ),
+    )
+    matched_groups = sum(any(marker in normalized for marker in group) for group in marker_groups)
+    return is_end_summary(materialized, raw_text) and matched_groups >= 3
 
 
 def _nearby_integer(lines: list[OCRLine], label_terms: tuple[str, ...]) -> int | None:
@@ -456,7 +541,7 @@ def screen_change_key(image: Any) -> str:
 def analyze_image(image: Any, config: dict[str, Any]) -> LiveResult | None:
     processed, lines, raw_text = read_ocr_lines(image, config)
     label = find_session_label(lines)
-    if label is None or not is_end_summary(lines, raw_text):
+    if label is None or not is_report_screen(lines, raw_text):
         return None
     amount = extract_money_near_label(processed, lines, label, config)
     if amount is None:
@@ -489,26 +574,58 @@ def set_dpi_awareness() -> None:
 
 
 def find_tiktok_windows(keywords: Iterable[str]) -> list[tuple[int, str, tuple[int, int, int, int]]]:
-    if sys.platform != "win32":
-        raise RuntimeError("Che do quet cua so hien chi ho tro Windows.")
-    import win32gui  # type: ignore
-
     wanted = [keyword.casefold() for keyword in keywords]
     found: list[tuple[int, str, tuple[int, int, int, int]]] = []
 
-    def callback(hwnd: int, _: Any) -> None:
-        if not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd):
-            return
-        title = win32gui.GetWindowText(hwnd).strip()
-        if not title or not any(keyword in title.casefold() for keyword in wanted):
-            return
-        left, top, right, bottom = win32gui.GetWindowRect(hwnd)
-        if right - left < 500 or bottom - top < 350:
-            return
-        found.append((hwnd, title, (left, top, right, bottom)))
+    if sys.platform == "win32":
+        import win32gui  # type: ignore
 
-    win32gui.EnumWindows(callback, None)
-    return found
+        def callback(hwnd: int, _: Any) -> None:
+            if not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd):
+                return
+            title = win32gui.GetWindowText(hwnd).strip()
+            if not title or not any(keyword in title.casefold() for keyword in wanted):
+                return
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            if right - left < 500 or bottom - top < 350:
+                return
+            found.append((hwnd, title, (left, top, right, bottom)))
+
+        win32gui.EnumWindows(callback, None)
+        return found
+
+    elif sys.platform == "darwin":
+        try:
+            from Quartz import (  # type: ignore
+                CGWindowListCopyWindowInfo,
+                kCGNullWindowID,
+                kCGWindowListOptionOnScreenOnly,
+            )
+
+            window_list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID)
+            for w in window_list:
+                owner = str(w.get("kCGWindowOwnerName", "") or "")
+                name = str(w.get("kCGWindowName", "") or "")
+                title = f"{owner} - {name}" if name else owner
+                if not any(keyword in title.casefold() for keyword in wanted):
+                    continue
+                bounds = w.get("kCGWindowBounds", {})
+                if not bounds:
+                    continue
+                left = int(bounds.get("X", 0))
+                top = int(bounds.get("Y", 0))
+                width = int(bounds.get("Width", 0))
+                height = int(bounds.get("Height", 0))
+                if width < 500 or height < 350:
+                    continue
+                window_id = int(w.get("kCGWindowNumber", 0))
+                found.append((window_id, title, (left, top, left + width, top + height)))
+        except Exception as err:
+            logging.warning("Loi khi tim cua so tren macOS: %s", err)
+        return found
+
+    else:
+        raise RuntimeError("Che do quet cua so hien chi ho tro Windows va macOS.")
 
 
 def capture_bbox(bbox: tuple[int, int, int, int]) -> Any:
@@ -620,12 +737,15 @@ class TelegramClient:
             self._decode(response)
 
 
-def new_session_message(result: LiveResult, state: dict[str, Any], now: datetime) -> str:
+def new_session_message(result: LiveResult, state: dict[str, Any], now: datetime, config: dict[str, Any] | None = None) -> str:
     count, total, diamonds = daily_totals(state, now.date())
+    machine = get_machine_name(config or {})
     lines = [
         "📊 TIKTOK LIVE - PHIÊN MỚI KẾT THÚC",
-        f"• Tạm tính phiên LIVE: ${format_money(result.amount)}",
     ]
+    if machine:
+        lines.append(f"🖥️ Máy: {machine}")
+    lines.append(f"• Tạm tính phiên LIVE: ${format_money(result.amount)}")
     if result.diamond_count is not None:
         lines.append(f"• Kim cương: {result.diamond_count:,}")
     lines.extend(
@@ -640,13 +760,20 @@ def new_session_message(result: LiveResult, state: dict[str, Any], now: datetime
     return "\n".join(lines)
 
 
-def daily_message(state: dict[str, Any], target: date) -> str:
+def daily_message(state: dict[str, Any], target: date, config: dict[str, Any] | None = None) -> str:
     count, total, diamonds = daily_totals(state, target)
+    machine = get_machine_name(config or {})
     lines = [
         f"📅 TỔNG KẾT TIKTOK LIVE {target:%d/%m/%Y}",
-        f"• Số phiên: {count}",
-        f"• Tổng tạm tính: ${format_money(total)}",
     ]
+    if machine:
+        lines.append(f"🖥️ Máy: {machine}")
+    lines.extend(
+        [
+            f"• Số phiên: {count}",
+            f"• Tổng tạm tính: ${format_money(total)}",
+        ]
+    )
     if diamonds:
         lines.append(f"• Tổng kim cương OCR: {diamonds:,}")
     return "\n".join(lines)
@@ -674,14 +801,16 @@ def register_result(
     state["sessions"].append(entry)
     # Tao message voi tong da bao gom phien vua phat hien, nhung chi ghi state sau khi gui thanh cong.
     try:
-        client.send_message(new_session_message(result, state, now))
+        client.send_message(new_session_message(result, state, now, config))
     except Exception:
         state["sessions"].pop()
         raise
 
     if bool(config.get("send_screenshot", False)):
         try:
-            client.send_photo(result.screenshot, f"TikTok LIVE: ${format_money(result.amount)}")
+            machine = get_machine_name(config)
+            caption_prefix = f"[{machine}] " if machine else ""
+            client.send_photo(result.screenshot, f"🖥️ {caption_prefix}TikTok LIVE: ${format_money(result.amount)}")
         except Exception as error:
             # Text report da gui thanh cong; khong gui lai text chi vi upload anh loi.
             logging.warning("Gui anh chup Telegram that bai: %s", error)
@@ -711,7 +840,7 @@ def maybe_send_daily(state: dict[str, Any], state_path: Path, client: TelegramCl
         state["last_daily_report_date"] = today
         save_state(state_path, state)
         return False
-    client.send_message(daily_message(state, now.date()))
+    client.send_message(daily_message(state, now.date(), config))
     state["last_daily_report_date"] = today
     save_state(state_path, state)
     return True
@@ -757,10 +886,10 @@ def run_daemon(config: dict[str, Any], state_path: Path, once: bool = False) -> 
         post_success_delay = 120.0
 
     last_no_window_log = 0.0
-    screen_cache: dict[int, str] = {}
+    screen_cache: dict[int, tuple[str, bool]] = {}
     logging.info("Bat dau theo doi TikTok LIVE Studio; chu ky %.1f giay.", interval)
     if post_success_delay > 0:
-        logging.info("Delay sau khi quet va gui thanh cong: %.1f giay.", post_success_delay)
+        logging.info("Delay sau khi quet va nhan dien thanh cong: %.1f giay.", post_success_delay)
 
     while not STOP_REQUESTED:
         now = datetime.now()
@@ -773,15 +902,18 @@ def run_daemon(config: dict[str, Any], state_path: Path, once: bool = False) -> 
             for hwnd, title, bbox in windows:
                 image = capture_bbox(bbox)
                 change_key = screen_change_key(image)
-                if screen_cache.get(hwnd) == change_key:
+                cached = screen_cache.get(hwnd)
+                if cached and cached[0] == change_key:
                     continue
                 if bool(config.get("debug_screenshots", False)):
                     save_debug_image(image, runtime_dir() / "debug")
                 result = analyze_image(image, config)
-                screen_cache[hwnd] = change_key
-                if result and register_result(result, state, state_path, client, config, now):
-                    logging.info("Da gui Telegram: $%s tu '%s'.", format_money(result.amount), title)
-                    success_detected = True
+                has_result = result is not None
+                screen_cache[hwnd] = (change_key, has_result)
+                if result:
+                    if register_result(result, state, state_path, client, config, now):
+                        success_detected = True
+                        logging.info("Da gui Telegram: $%s tu '%s'.", format_money(result.amount), title)
             if maybe_send_daily(state, state_path, client, config, now):
                 logging.info("Da gui bao cao tong ket ngay.")
         except Exception:
@@ -791,7 +923,7 @@ def run_daemon(config: dict[str, Any], state_path: Path, once: bool = False) -> 
 
         current_interval = interval
         if success_detected and post_success_delay > 0:
-            logging.info("Quet va gui thanh cong phien LIVE; tam dung %.1f giay truoc lan quet tiep theo.", post_success_delay)
+            logging.info("Nhan dien thanh cong phien LIVE; tam dung %.1f giay truoc lan quet tiep theo.", post_success_delay)
             current_interval = post_success_delay
 
         # Sleep theo nhieu dot ngan de thoat nhanh khi Task Scheduler dung task.
@@ -802,7 +934,83 @@ def run_daemon(config: dict[str, Any], state_path: Path, once: bool = False) -> 
     return 0
 
 
-def analyze_paths(paths: Iterable[Path], config: dict[str, Any]) -> int:
+def debug_ocr_analysis(image: Any, config: dict[str, Any], path: Path | str | None = None) -> None:
+    path_str = str(path) if path else "Image"
+    print("=" * 60)
+    print(f"🔍 DEBUG OCR ANALYSIS: {path_str}")
+    print(f"Kich thuoc anh: {image.width}x{image.height}")
+    print("=" * 60)
+
+    processed, lines, raw_text = read_ocr_lines(image, config)
+    print("\n[1] RAW OCR TEXT:")
+    print(raw_text if raw_text else "<KHONG TIM THAY VAN BAN>")
+
+    print(f"\n[2] DEM DUOC {len(lines)} DONG OCR:")
+    for idx, line in enumerate(lines):
+        print(f"  Line {idx:2d} | bbox=({line.left:4d}, {line.top:4d}, {line.width:4d}, {line.height:4d}) | conf={line.confidence:5.1f}% | text=\"{line.text}\"")
+
+    print("\n[3] KIEM TRA NHAN PHIEN LIVE:")
+    label = find_session_label(lines)
+    if label:
+        print(f"  -> Tim thay nhan: \"{label.text}\" | bbox=({label.left}, {label.top}, {label.width}, {label.height}) | conf={label.confidence:.1f}%")
+    else:
+        print("  ❌ KHONG TIM THAY NHAN PHIEN LIVE!")
+
+    print("\n[4] KIEM TRA DUNG MAN HINH REPORT (is_report_screen):")
+    is_end = is_report_screen(lines, raw_text)
+    print(f"  -> Ket qua: {is_end}")
+
+    print("\n[5] KIEM TRA DOC SO TIEN TAI NHAN (extract_money_near_label):")
+    if label:
+        candidates: list[tuple[float, Decimal, OCRLine, float]] = []
+        for line in lines:
+            if line is label:
+                continue
+            amount = parse_money(line.text, allow_bare=False)
+            if amount is None:
+                continue
+            vertical_delta = line.top - label.bottom
+            horizontal_delta = abs(line.center_x - label.center_x)
+            if -label.height <= vertical_delta <= max(label.height * 5, processed.height * 0.1):
+                overlap = _horizontal_overlap_ratio(line, label)
+                if overlap >= 0.35:
+                    score = abs(vertical_delta) * 2 + horizontal_delta
+                    candidates.append((score, amount, line, overlap))
+
+        if candidates:
+            print(f"  -> Tim thay {len(candidates)} ung vien so tien gan nhan:")
+            for score, amount, line, overlap in candidates:
+                print(f"      - ${amount} | line=\"{line.text}\" | left={line.left} | overlap={overlap:.2f}")
+            candidates.sort(key=lambda item: item[2].left)
+            chosen_amount = candidates[0][1]
+            print(f"  -> So tien chon (toa do left nho nhat - Cot Phiên LIVE): ${chosen_amount}")
+        else:
+            print("  ⚠️ Khong tim thay ung vien so tien bang overlap bbox; thu fallback crop...")
+            fallback_amount = extract_money_near_label(processed, lines, label, config)
+            print(f"  -> Fallback amount: {fallback_amount}")
+    else:
+        print("  (Bo qua vi khong co nhan)")
+
+    print("\n[6] KIEM TRA KIM CUONG (& SUMMARY):")
+    diamonds = _nearby_integer(lines, ("kim", "cuong"))
+    summary = choose_summary(lines)
+    print(f"  -> So kim cuong: {diamonds}")
+    print(f"  -> Summary: \"{summary}\"")
+
+    print("\n[7] KET QUA ANALYZE_IMAGE CHINH THUC:")
+    result = analyze_image(image, config)
+    if result:
+        print("  ✅ THANH CONG!")
+        print(f"     Amount: ${format_money(result.amount)}")
+        print(f"     Diamond Count: {result.diamond_count}")
+        print(f"     Summary: {result.summary}")
+        print(f"     Signature: {result.signature}")
+    else:
+        print("  ❌ THAT BAI! (analyze_image tra ve None)")
+    print("=" * 60 + "\n")
+
+
+def analyze_paths(paths: Iterable[Path], config: dict[str, Any], debug_ocr: bool = False) -> int:
     from PIL import Image  # type: ignore
 
     found = 0
@@ -810,6 +1018,8 @@ def analyze_paths(paths: Iterable[Path], config: dict[str, Any]) -> int:
         try:
             with Image.open(path) as opened:
                 image = opened.convert("RGB")
+            if debug_ocr:
+                debug_ocr_analysis(image, config, path)
             result = analyze_image(image, config)
             payload = result.as_public_dict() if result else {"result": None}
             print(json.dumps({"file": str(path), **payload}, ensure_ascii=False))
@@ -827,6 +1037,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--once", action="store_true", help="Quet man hinh mot lan roi thoat")
     parser.add_argument("--image", type=Path, help="Chi OCR mot anh, khong gui Telegram")
     parser.add_argument("--image-dir", type=Path, help="OCR tat ca anh JPG/PNG trong thu muc")
+    parser.add_argument("--debug-ocr", action="store_true", help="In chi tiet qua trinh nhan dien OCR de debug")
+    parser.add_argument("--reset-state", action="store_true", help="Xoa du lieu phien va reset bien dem tong hop")
+    parser.add_argument("--machine-name", type=str, default="", help="Ten may de dinh kem vao thong bao Telegram")
     parser.add_argument("--test-telegram", action="store_true", help="Gui tin nhan thu roi thoat")
     parser.add_argument("--verbose", action="store_true")
     return parser
@@ -837,16 +1050,23 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging(args.log, args.verbose)
     try:
         config = load_config(args.config)
+        if args.machine_name:
+            config["machine_name"] = args.machine_name
         configure_tesseract(config)
+        if args.reset_state:
+            save_state(args.state, {"sessions": [], "last_daily_report_date": ""})
+            print(f"✅ Da reset bien dem doanh thu va xoa du lieu phien tai: {args.state}")
+            return 0
         if args.image:
-            return analyze_paths([args.image], config)
+            return analyze_paths([args.image], config, debug_ocr=args.debug_ocr)
         if args.image_dir:
             extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
             paths = sorted(path for path in args.image_dir.iterdir() if path.suffix.casefold() in extensions)
-            return analyze_paths(paths, config)
+            return analyze_paths(paths, config, debug_ocr=args.debug_ocr)
         if args.test_telegram:
             client = TelegramClient(str(config.get("telegram_bot_token", "")), str(config.get("telegram_chat_id", "")))
-            client.send_message(f"✅ Auto Desktop LIVE Reporter ket noi thanh cong luc {datetime.now():%H:%M:%S %d/%m/%Y}.")
+            machine_str = f"tu [{get_machine_name(config)}] " if get_machine_name(config) else ""
+            client.send_message(f"✅ Auto Desktop LIVE Reporter ket noi thanh cong {machine_str}luc {datetime.now():%H:%M:%S %d/%m/%Y}.")
             print("Telegram OK")
             return 0
         set_dpi_awareness()

@@ -12,6 +12,7 @@ from live_reporter.live_reporter import (
     extract_money_near_label,
     find_session_label,
     is_end_summary,
+    is_report_screen,
     load_state,
     normalize_text,
     parse_money,
@@ -124,6 +125,19 @@ class TextParsingTests(unittest.TestCase):
         self.assertTrue(is_end_summary([], "Da ket thic! 21 nguoi xem"))
         self.assertFalse(is_end_summary([], "Dang phat LIVE"))
 
+    def test_report_screen_requires_multiple_layout_markers(self) -> None:
+        self.assertFalse(is_report_screen([], "Da ket thuc $0.11"))
+        self.assertFalse(is_report_screen([], "Thoi luong 00:10 Trai nghiem LIVE"))
+        report_text = (
+            "Thdi lugng 00:26:41 Tong so luot xem Luot chia se "
+            "Kim cudng Tam tinh tuan nay Trai nghiem LIVE cua ban"
+        )
+        self.assertTrue(is_report_screen([], report_text))
+
+    def test_report_screen_accepts_explicit_end_with_stat_groups(self) -> None:
+        text = "Phien LIVE da ket thuc Thoi luong Tong so luot xem Follower moi Kim cuong"
+        self.assertTrue(is_report_screen([], text))
+
 
 class ConfigTests(unittest.TestCase):
     def test_default_config_has_post_success_delay(self) -> None:
@@ -152,6 +166,59 @@ class StateTests(unittest.TestCase):
             save_state(path, state)
             restored = load_state(path)
             self.assertEqual(daily_totals(restored, date(2026, 7, 21)), (2, Decimal("0.65"), 169))
+
+
+class DaemonLoopTests(unittest.TestCase):
+    @patch("live_reporter.live_reporter.TelegramClient")
+    @patch("live_reporter.live_reporter.find_tiktok_windows")
+    @patch("live_reporter.live_reporter.capture_bbox")
+    @patch("live_reporter.live_reporter.screen_change_key")
+    @patch("live_reporter.live_reporter.analyze_image")
+    @patch("live_reporter.live_reporter.register_result")
+    @patch("live_reporter.live_reporter.time.sleep")
+    def test_delay_applies_only_on_new_successful_captures(
+        self, mock_sleep, mock_register, mock_analyze, mock_key, mock_capture, mock_windows, mock_telegram
+    ) -> None:
+        from live_reporter import live_reporter
+        from live_reporter.live_reporter import run_daemon
+
+        mock_windows.return_value = [(101, "TikTok LIVE Studio", (0, 0, 800, 600))]
+        mock_capture.return_value = "fake_image"
+        mock_key.return_value = "hash123"
+        fake_result = SimpleNamespace(amount=Decimal("1.00"), signature="sig123")
+        mock_analyze.return_value = fake_result
+        mock_register.return_value = True
+
+        def stop_after_one_sleep(*args, **kwargs):
+            live_reporter.STOP_REQUESTED = True
+
+        mock_sleep.side_effect = stop_after_one_sleep
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_path = Path(tmpdir) / "state.json"
+            config = {
+                "telegram_bot_token": "token",
+                "telegram_chat_id": "123",
+                "scan_interval_seconds": 5,
+                "post_success_delay_seconds": 0.8,
+            }
+
+            # Lan 1: ket qua OCR moi (register_result -> True)
+            live_reporter.STOP_REQUESTED = False
+            run_daemon(config, state_path, once=False)
+            self.assertTrue(mock_sleep.called)
+            first_sleep_arg = mock_sleep.call_args[0][0]
+            self.assertLess(first_sleep_arg, 0.9)
+
+            mock_sleep.reset_mock()
+            mock_sleep.side_effect = stop_after_one_sleep
+            # Lan 2: ket qua OCR giu nguyen va da duoc register truoc do (register_result -> False)
+            mock_register.return_value = False
+            live_reporter.STOP_REQUESTED = False
+            run_daemon(config, state_path, once=False)
+            self.assertTrue(mock_sleep.called)
+            second_sleep_arg = mock_sleep.call_args[0][0]
+            self.assertEqual(second_sleep_arg, 1.0)
 
 
 if __name__ == "__main__":
