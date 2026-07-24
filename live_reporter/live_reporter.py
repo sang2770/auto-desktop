@@ -40,6 +40,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "daily_report_time": "23:55",
     "send_empty_daily_report": False,
     "send_screenshot": False,
+    "ocr_engine": "paddleocr",
     "ocr_languages": "eng",
     "ocr_min_confidence": 20,
     "tesseract_cmd": "",
@@ -129,6 +130,11 @@ def load_config(path: Path) -> dict[str, Any]:
 
 
 def setup_logging(log_path: Path, verbose: bool = False) -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     log_path.parent.mkdir(parents=True, exist_ok=True)
     handlers: list[logging.Handler] = [
         RotatingFileHandler(log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
@@ -143,41 +149,39 @@ def setup_logging(log_path: Path, verbose: bool = False) -> None:
     )
 
 
-def resolve_tesseract(configured: str) -> str:
-    candidates = [
-        configured,
-        shutil.which("tesseract"),
-        "/opt/homebrew/bin/tesseract",
-        "/usr/local/bin/tesseract",
-    ]
-    program_files = [os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"), os.environ.get("LOCALAPPDATA")]
-    for base in program_files:
-        if base:
-            candidates.append(str(Path(base) / "Tesseract-OCR" / "tesseract.exe"))
-    for candidate in candidates:
-        if candidate and Path(candidate).is_file():
-            return str(Path(candidate))
-    raise RuntimeError(
-        "Khong tim thay Tesseract OCR. Cai Tesseract OCR va them vao PATH, "
-        "hoac dien duong dan tesseract.exe/tesseract vao tesseract_cmd trong config."
-    )
+_PADDLE_OCR_ENGINE: Any = None
 
 
-def configure_tesseract(config: dict[str, Any]) -> None:
-    import pytesseract  # type: ignore
+def get_paddle_ocr() -> Any:
+    global _PADDLE_OCR_ENGINE
+    if _PADDLE_OCR_ENGINE is None:
+        import logging
+        from paddleocr import PaddleOCR  # type: ignore
 
-    pytesseract.pytesseract.tesseract_cmd = resolve_tesseract(str(config.get("tesseract_cmd", "")))
-    requested = str(config.get("ocr_languages", "eng"))
-    installed = set(pytesseract.get_languages(config=""))
-    available = [lang for lang in requested.split("+") if lang in installed]
-    if not available:
-        if "eng" not in installed:
-            raise RuntimeError("Tesseract chua co goi ngon ngu 'eng'.")
-        available = ["eng"]
-    actual = "+".join(available)
-    if actual != requested:
-        logging.warning("OCR language '%s' chua day du; dung '%s'.", requested, actual)
-    config["ocr_languages"] = actual
+        logging.getLogger("ppocr").setLevel(logging.ERROR)
+        # Enable GPU if available (set env var GPU_ALWAYS=1 to force)
+        gpu_env = os.getenv("GPU_ALWAYS")
+        use_gpu = bool(gpu_env) if gpu_env is not None else False
+        try:
+            _PADDLE_OCR_ENGINE = PaddleOCR(
+                lang="en",
+                use_angle_cls=False,
+                show_log=False,
+                det_limit_side_len=640,
+                rec_batch_num=1,
+                use_gpu=False,
+            )
+        except Exception:
+            _PADDLE_OCR_ENGINE = PaddleOCR(lang="en")
+    return _PADDLE_OCR_ENGINE
+
+
+def configure_ocr(config: dict[str, Any]) -> None:
+    try:
+        get_paddle_ocr()
+        logging.info("Khoi tao PaddleOCR engine thanh cong.")
+    except Exception as error:
+        raise RuntimeError(f"Khong khoi tao duoc PaddleOCR engine: {error}") from error
 
 
 def prepare_image(image: Any) -> Any:
@@ -187,8 +191,12 @@ def prepare_image(image: Any) -> Any:
     gray = ImageOps.autocontrast(gray, cutoff=1)
     gray = ImageEnhance.Contrast(gray).enhance(1.6)
     # Anh mau co chu nho; upscale giup Tesseract doc dau cham va ky hieu $ on dinh hon.
-    scale = 2 if min(gray.size) < 1000 else 1.5
-    resized = gray.resize((int(gray.width * scale), int(gray.height * scale)))
+    # Reduce image size for faster OCR; no aggressive up‑scaling.
+    if max(gray.width, gray.height) > 1200:
+        scale = 1200 / max(gray.width, gray.height)
+        resized = gray.resize((int(gray.width * scale), int(gray.height * scale)))
+    else:
+        resized = gray
     return resized.filter(ImageFilter.SHARPEN)
 
 
@@ -225,7 +233,54 @@ def _tokens_to_segments(tokens: list[dict[str, Any]]) -> list[OCRLine]:
     return segments
 
 
-def read_ocr_lines(image: Any, config: dict[str, Any]) -> tuple[Any, list[OCRLine], str]:
+def read_ocr_lines_paddle(image: Any, config: dict[str, Any]) -> tuple[Any, list[OCRLine], str]:
+    import numpy as np  # type: ignore
+
+    ocr = get_paddle_ocr()
+    rgb_img = image.convert("RGB")
+    img_np = np.array(rgb_img)
+
+    results = ocr.ocr(img_np, cls=False)
+
+    lines: list[OCRLine] = []
+    all_text: list[str] = []
+    minimum_confidence = float(config.get("ocr_min_confidence", 20))
+
+    if results and results[0]:
+        for item in results[0]:
+            if not item or len(item) < 2:
+                continue
+            points, (text, conf) = item[0], item[1]
+            text_str = str(text).strip()
+            conf_val = float(conf)
+            conf_percent = conf_val * 100.0 if conf_val <= 1.0 else conf_val
+            if not text_str or conf_percent < minimum_confidence:
+                continue
+
+            xs = [p[0] for p in points]
+            ys = [p[1] for p in points]
+            left = int(min(xs))
+            top = int(min(ys))
+            width = max(1, int(max(xs) - left))
+            height = max(1, int(max(ys) - top))
+
+            all_text.append(text_str)
+            lines.append(
+                OCRLine(
+                    text=text_str,
+                    left=left,
+                    top=top,
+                    width=width,
+                    height=height,
+                    confidence=conf_percent,
+                )
+            )
+
+    lines.sort(key=lambda line: (line.top, line.left))
+    return image, lines, " ".join(all_text)
+
+
+def read_ocr_lines_tesseract(image: Any, config: dict[str, Any]) -> tuple[Any, list[OCRLine], str]:
     import pytesseract  # type: ignore
     from pytesseract import Output  # type: ignore
 
@@ -265,6 +320,16 @@ def read_ocr_lines(image: Any, config: dict[str, Any]) -> tuple[Any, list[OCRLin
         lines.extend(_tokens_to_segments(tokens))
     lines.sort(key=lambda line: (line.top, line.left))
     return processed, lines, " ".join(all_text)
+
+
+def read_ocr_lines(image: Any, config: dict[str, Any]) -> tuple[Any, list[OCRLine], str]:
+    engine = str(config.get("ocr_engine", "paddleocr")).lower()
+    if engine == "paddleocr":
+        try:
+            return read_ocr_lines_paddle(image, config)
+        except Exception as error:
+            logging.warning("Loi khi quet bang PaddleOCR (%s); thu fallback sang Tesseract.", error)
+    return read_ocr_lines_tesseract(image, config)
 
 
 def _similarity(value: str, target: str) -> float:
@@ -357,62 +422,60 @@ def extract_money_near_label(processed: Any, lines: list[OCRLine], label: OCRLin
         if amount is None:
             continue
         vertical_delta = line.top - label.bottom
-        horizontal_delta = abs(line.center_x - label.center_x)
         if -label.height <= vertical_delta <= max(label.height * 5, processed.height * 0.1):
-            # Hai cot "phien LIVE nay" va "tuan nay" nam sat nhau. Neu OCR bo
-            # sot so o cot dau, chi dung khoang cach tam se nhan nham so tuan.
-            # Bat buoc bbox so tien phai thuc su nam trong cot cua nhan phien LIVE.
-            if _horizontal_overlap_ratio(line, label) >= 0.35:
+            if _horizontal_overlap_ratio(line, label) >= 0.25:
                 candidates.append((line.left, amount))
     if candidates:
-        # TikTok LIVE Studio luon dat cot Phiên LIVE o BEN TRAI (toa do left nho nhat).
-        # Luon lay con so o ngoai cung ben trai, khong so sanh lon nho giua tien phien va tien tuan.
         candidates.sort(key=lambda item: item[0])
         return candidates[0][1]
 
-    # Fallback: OCR rieng vung ngay duoi nhan, chi cho phep ky tu tien te va chu so.
-    import pytesseract  # type: ignore
+    # Relaxed overlap search among existing lines (for bare amounts or slight horizontal shift)
+    for line in lines:
+        if line is label:
+            continue
+        amount = parse_money(line.text, allow_bare=True)
+        if amount is None:
+            continue
+        vertical_delta = line.top - label.bottom
+        if -label.height <= vertical_delta <= max(label.height * 5, processed.height * 0.1):
+            if _horizontal_overlap_ratio(line, label) >= 0.35 and line.center_x <= label.right:
+                candidates.append((line.left, amount))
+    if candidates:
+        candidates.sort(key=lambda item: item[0])
+        return candidates[0][1]
 
+    # Fallback: OCR rieng vung ngay duoi nhan
+    engine = str(config.get("ocr_engine", "paddleocr")).lower()
     padding_x = max(12, int(label.width * 0.2))
-    crop = processed.crop(
-        (
-            max(0, label.left - padding_x),
-            max(0, label.bottom - 3),
-            # Khong mo rong sang phai: day la noi cot "tuan nay" bat dau trong
-            # layout TikTok, va fallback chi duoc phep doc doanh thu phien/ngay.
-            min(processed.width, label.right),
-            min(processed.height, label.bottom + max(label.height * 5, 80)),
-        )
+    crop_box = (
+        max(0, label.left - padding_x),
+        max(0, label.bottom - 3),
+        min(processed.width, label.right),
+        min(processed.height, label.bottom + max(label.height * 5, 80)),
     )
-    # Font, DPI scaling and GPU rendering differ between machines. Try several
-    # inexpensive OCR variants instead of relying on one PSM against one crop.
-    from PIL import ImageEnhance, ImageOps  # type: ignore
+    crop = processed.crop(crop_box) if hasattr(processed, "crop") else processed
 
-    variants = [crop]
+    if engine == "paddleocr":
+        try:
+            _, crop_lines, _ = read_ocr_lines_paddle(crop, config)
+            for c_line in crop_lines:
+                amt = parse_money(c_line.text, allow_bare=True)
+                if amt is not None:
+                    return amt
+        except Exception:
+            pass
+
     try:
-        gray = ImageOps.grayscale(crop)
-        contrasted = ImageEnhance.Contrast(ImageOps.autocontrast(gray)).enhance(2.0)
-        variants.extend(
-            [
-                contrasted,
-                contrasted.resize((contrasted.width * 2, contrasted.height * 2)),
-                contrasted.point(lambda pixel: 255 if pixel > 145 else 0),
-            ]
-        )
-    except Exception:
-        logging.debug("Khong tao duoc cac bien the OCR tien.", exc_info=True)
+        import pytesseract  # type: ignore
 
-    for variant in variants:
-        for psm in (7, 6, 11, 13):
-            text = pytesseract.image_to_string(
-                variant,
-                lang=str(config["ocr_languages"]),
-                config=f"--oem 3 --psm {psm} -c tessedit_char_whitelist=$S0123456789.,",
-            )
-            amount = parse_money(text, allow_bare=True)
-            if amount is not None:
-                return amount
-    return None
+        text = pytesseract.image_to_string(
+            crop,
+            lang=str(config.get("ocr_languages", "eng")),
+            config="--oem 3 --psm 7 -c tessedit_char_whitelist=$S0123456789.,",
+        )
+        return parse_money(text, allow_bare=True)
+    except Exception:
+        return None
 
 
 def is_end_summary(lines: Iterable[OCRLine], raw_text: str) -> bool:
@@ -436,41 +499,30 @@ def is_end_summary(lines: Iterable[OCRLine], raw_text: str) -> bool:
 
 
 def is_report_screen(lines: Iterable[OCRLine], raw_text: str) -> bool:
-    """Require several independent layout markers before accepting a report.
-
-    A TikTok window can contain dollar values and end-live wording on ordinary
-    screens. The result page consistently contains multiple statistic groups;
-    matching those groups avoids sending money found elsewhere in the window.
-    """
-    materialized = list(lines)
+    """Loai bo popup/text le co chu 'ket thuc' nhung khong phai trang tong ket."""
     normalized = normalize_text(raw_text)
-    marker_groups = (
-        ("thoi luong", "thdi lugng", "duration"),
-        (
-            "tong so luot xem",
-            "tong so xem",
-            "luot chia se",
-            "lugt xem",
-            "lugt chia",
-            "follower moi",
-            "follower mdi",
-            "nguoi gui qua tang",
-            "ngudi gti qua tang",
-        ),
-        ("kim cuong", "kim cudng", "tam tinh tuan", "tuan nay"),
-        ("trai nghiem live", "trai nghiém live", "experience live"),
-        (
-            "ket noi",
-            "ket ndi",
-            "nhieu qua tang nhat",
-            "nhieu qua ta",
-            "thoi gian xem nhieu nhat",
-            "thoi gian xe",
-            "fan club",
-        ),
+    explicit_end = (
+        "ket thuc" in normalized
+        or re.search(r"\bda ket th[a-z0-9]+", normalized) is not None
+        or any(
+            _similarity(normalize_text(line.text), "phien live da ket thuc") >= 0.62
+            for line in lines
+        )
     )
-    matched_groups = sum(any(marker in normalized for marker in group) for group in marker_groups)
-    return is_end_summary(materialized, raw_text) and matched_groups >= 3
+    marker_groups = (
+        ("thoi luong", "thdi lugng"),
+        ("tong so luot xem", "luot xem"),
+        ("kim cuong", "kim cudng"),
+        ("follower moi",),
+        ("luot chia se",),
+        ("trai nghiem live",),
+        ("tam tinh tuan",),
+    )
+    matched_groups = sum(
+        any(marker in normalized for marker in alternatives)
+        for alternatives in marker_groups
+    )
+    return matched_groups >= 3 or (explicit_end and matched_groups >= 2)
 
 
 def _nearby_integer(lines: list[OCRLine], label_terms: tuple[str, ...]) -> int | None:
@@ -529,19 +581,17 @@ def perceptual_signature(image: Any, amount: Decimal, summary: str) -> str:
     return hashlib.sha256(payload).hexdigest()[:24]
 
 
-def screen_change_key(image: Any) -> str:
-    """Hash du chi tiet de bo qua OCR khi man hinh ket qua van giu nguyen."""
-    from PIL import ImageOps  # type: ignore
-
-    stable = image.crop((0, 0, int(image.width * 0.78), int(image.height * 0.78)))
-    sample = ImageOps.grayscale(stable).resize((160, 90))
-    return hashlib.sha256(sample.tobytes()).hexdigest()[:20]
-
 
 def analyze_image(image: Any, config: dict[str, Any]) -> LiveResult | None:
+    # Start total processing timer
+    total_start = time.time()
+    # OCR part timing
+    ocr_start = time.time()
     processed, lines, raw_text = read_ocr_lines(image, config)
+    ocr_duration = time.time() - ocr_start
     label = find_session_label(lines)
     if label is None or not is_report_screen(lines, raw_text):
+        logging.info(f"No result screen detected; OCR took {ocr_duration:.2f}s")
         return None
     amount = extract_money_near_label(processed, lines, label, config)
     if amount is None:
@@ -549,7 +599,7 @@ def analyze_image(image: Any, config: dict[str, Any]) -> LiveResult | None:
         return None
     diamonds = _nearby_integer(lines, ("kim", "cuong"))
     summary = choose_summary(lines)
-    return LiveResult(
+    result = LiveResult(
         amount=amount,
         diamond_count=diamonds,
         summary=summary,
@@ -557,6 +607,9 @@ def analyze_image(image: Any, config: dict[str, Any]) -> LiveResult | None:
         ocr_text=raw_text,
         screenshot=image,
     )
+    total_duration = time.time() - total_start
+    logging.info(f"OCR time: {ocr_duration:.2f}s, total analyze_image time: {total_duration:.2f}s")
+    return result
 
 
 def set_dpi_awareness() -> None:
@@ -636,7 +689,7 @@ def capture_bbox(bbox: tuple[int, int, int, int]) -> Any:
 
 def load_state(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return {"sessions": [], "last_daily_report_date": ""}
+        return {"sessions": [], "last_daily_report_date": "", "result_screen_active": False}
     try:
         with path.open("r", encoding="utf-8") as handle:
             state = json.load(handle)
@@ -644,10 +697,11 @@ def load_state(path: Path) -> dict[str, Any]:
             raise ValueError("invalid state shape")
         state.setdefault("sessions", [])
         state.setdefault("last_daily_report_date", "")
+        state.setdefault("result_screen_active", False)
         return state
     except (OSError, ValueError, json.JSONDecodeError) as error:
         logging.error("Khong doc duoc state (%s); tao state moi.", error)
-        return {"sessions": [], "last_daily_report_date": ""}
+        return {"sessions": [], "last_daily_report_date": "", "result_screen_active": False}
 
 
 def save_state(path: Path, state: dict[str, Any]) -> None:
@@ -738,30 +792,26 @@ class TelegramClient:
 
 
 def new_session_message(result: LiveResult, state: dict[str, Any], now: datetime, config: dict[str, Any] | None = None) -> str:
-    count, total, diamonds = daily_totals(state, now.date())
+    count, total, _ = daily_totals(state, now.date())
     machine = get_machine_name(config or {})
     lines = [
         "📊 TIKTOK LIVE - PHIÊN MỚI KẾT THÚC",
     ]
     if machine:
         lines.append(f"🖥️ Máy: {machine}")
-    lines.append(f"• Tạm tính phiên LIVE: ${format_money(result.amount)}")
-    if result.diamond_count is not None:
-        lines.append(f"• Kim cương: {result.diamond_count:,}")
     lines.extend(
         [
+            f"• Tạm tính phiên LIVE: ${format_money(result.amount)}",
             f"• Ghi nhận lúc: {now:%H:%M:%S %d/%m/%Y}",
             "",
             f"Tổng hôm nay: {count} phiên | ${format_money(total)}",
         ]
     )
-    if diamonds:
-        lines[-1] += f" | {diamonds:,} kim cương"
     return "\n".join(lines)
 
 
 def daily_message(state: dict[str, Any], target: date, config: dict[str, Any] | None = None) -> str:
-    count, total, diamonds = daily_totals(state, target)
+    count, total, _ = daily_totals(state, target)
     machine = get_machine_name(config or {})
     lines = [
         f"📅 TỔNG KẾT TIKTOK LIVE {target:%d/%m/%Y}",
@@ -774,8 +824,6 @@ def daily_message(state: dict[str, Any], target: date, config: dict[str, Any] | 
             f"• Tổng tạm tính: ${format_money(total)}",
         ]
     )
-    if diamonds:
-        lines.append(f"• Tổng kim cương OCR: {diamonds:,}")
     return "\n".join(lines)
 
 
@@ -787,10 +835,8 @@ def register_result(
     config: dict[str, Any],
     now: datetime,
 ) -> bool:
-    known = {str(item.get("signature")) for item in state.get("sessions", [])}
-    if result.signature in known:
+    if any(session.get("signature") == result.signature for session in state.get("sessions", [])):
         return False
-
     entry = {
         "signature": result.signature,
         "amount_usd": format_money(result.amount),
@@ -799,11 +845,14 @@ def register_result(
         "summary": result.summary,
     }
     state["sessions"].append(entry)
-    # Tao message voi tong da bao gom phien vua phat hien, nhung chi ghi state sau khi gui thanh cong.
+    state["result_screen_active"] = True
+    save_state(state_path, state)
     try:
         client.send_message(new_session_message(result, state, now, config))
     except Exception:
-        state["sessions"].pop()
+        logging.error(
+            "Khong xac dinh duoc Telegram da nhan tin hay chua; giu marker chong gui trung."
+        )
         raise
 
     if bool(config.get("send_screenshot", False)):
@@ -869,11 +918,39 @@ def scan_once(config: dict[str, Any]) -> list[LiveResult]:
 
 
 STOP_REQUESTED = False
+_INSTANCE_MUTEX: Any = None
 
 
 def request_stop(*_: Any) -> None:
     global STOP_REQUESTED
     STOP_REQUESTED = True
+
+
+def acquire_single_instance() -> bool:
+    """Windows mutex ngan hai python/pythonw gui cung mot ket qua song song."""
+    global _INSTANCE_MUTEX
+    if sys.platform != "win32":
+        return True
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.CreateMutexW(None, False, "Local\\AutoDesktopLiveReporter")
+    if not handle:
+        raise ctypes.WinError()
+    if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        kernel32.CloseHandle(handle)
+        return False
+    _INSTANCE_MUTEX = handle
+    return True
+
+
+def release_single_instance() -> None:
+    global _INSTANCE_MUTEX
+    if _INSTANCE_MUTEX is not None and sys.platform == "win32":
+        import ctypes
+
+        ctypes.windll.kernel32.CloseHandle(_INSTANCE_MUTEX)
+        _INSTANCE_MUTEX = None
 
 
 def run_daemon(config: dict[str, Any], state_path: Path, once: bool = False) -> int:
@@ -886,34 +963,38 @@ def run_daemon(config: dict[str, Any], state_path: Path, once: bool = False) -> 
         post_success_delay = 120.0
 
     last_no_window_log = 0.0
-    screen_cache: dict[int, tuple[str, bool]] = {}
     logging.info("Bat dau theo doi TikTok LIVE Studio; chu ky %.1f giay.", interval)
     if post_success_delay > 0:
         logging.info("Delay sau khi quet va nhan dien thanh cong: %.1f giay.", post_success_delay)
 
     while not STOP_REQUESTED:
         now = datetime.now()
-        success_detected = False
+        new_result_sent = False
         try:
             windows = find_tiktok_windows(config.get("window_title_keywords", []))
-            if not windows and time.monotonic() - last_no_window_log > 300:
-                logging.info("Chua thay cua so TikTok LIVE Studio dang hien thi.")
-                last_no_window_log = time.monotonic()
-            for hwnd, title, bbox in windows:
-                image = capture_bbox(bbox)
-                change_key = screen_change_key(image)
-                cached = screen_cache.get(hwnd)
-                if cached and cached[0] == change_key:
-                    continue
-                if bool(config.get("debug_screenshots", False)):
-                    save_debug_image(image, runtime_dir() / "debug")
-                result = analyze_image(image, config)
-                has_result = result is not None
-                screen_cache[hwnd] = (change_key, has_result)
-                if result:
-                    if register_result(result, state, state_path, client, config, now):
-                        success_detected = True
-                        logging.info("Da gui Telegram: $%s tu '%s'.", format_money(result.amount), title)
+            saw_result_screen = False
+            if not windows:
+                if time.monotonic() - last_no_window_log > 30:
+                    logging.info("Khong tim thay cua so TikTok LIVE Studio (khop title keywords: %s).", config.get("window_title_keywords", []))
+                    last_no_window_log = time.monotonic()
+            else:
+                last_no_window_log = 0.0
+                for hwnd, title, bbox in windows:
+                    image = capture_bbox(bbox)
+                    if bool(config.get("debug_screenshots", False)):
+                        save_debug_image(image, runtime_dir() / "debug")
+                    result = analyze_image(image, config)
+                    if result:
+                        saw_result_screen = True
+                        if register_result(result, state, state_path, client, config, now):
+                            new_result_sent = True
+                            logging.info("Da gui Telegram: $%s tu '%s'.", format_money(result.amount), title)
+                    else:
+                        logging.info("Dang quet cua so '%s' - Khong thay bảng ket qua LIVE.", title)
+            if windows and not saw_result_screen and bool(state.get("result_screen_active", False)):
+                state["result_screen_active"] = False
+                save_state(state_path, state)
+                logging.info("Man hinh ket qua da dong; san sang ghi nhan phien LIVE tiep theo.")
             if maybe_send_daily(state, state_path, client, config, now):
                 logging.info("Da gui bao cao tong ket ngay.")
         except Exception:
@@ -922,9 +1003,10 @@ def run_daemon(config: dict[str, Any], state_path: Path, once: bool = False) -> 
             break
 
         current_interval = interval
-        if success_detected and post_success_delay > 0:
-            logging.info("Nhan dien thanh cong phien LIVE; tam dung %.1f giay truoc lan quet tiep theo.", post_success_delay)
-            current_interval = post_success_delay
+        post_delay = float(config.get("post_success_delay_seconds", 120))
+        if new_result_sent and post_delay > 0:
+            logging.info("Da nhan dien va gui Telegram thanh cong; ngung quet trong %.1f giay.", post_delay)
+            current_interval = post_delay
 
         # Sleep theo nhieu dot ngan de thoat nhanh khi Task Scheduler dung task.
         deadline = time.monotonic() + current_interval
@@ -956,8 +1038,8 @@ def debug_ocr_analysis(image: Any, config: dict[str, Any], path: Path | str | No
     else:
         print("  ❌ KHONG TIM THAY NHAN PHIEN LIVE!")
 
-    print("\n[4] KIEM TRA DUNG MAN HINH REPORT (is_report_screen):")
-    is_end = is_report_screen(lines, raw_text)
+    print("\n[4] KIEM TRA DANG MAN HINH KET THUC (is_end_summary):")
+    is_end = is_end_summary(lines, raw_text)
     print(f"  -> Ket qua: {is_end}")
 
     print("\n[5] KIEM TRA DOC SO TIEN TAI NHAN (extract_money_near_label):")
@@ -1041,6 +1123,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reset-state", action="store_true", help="Xoa du lieu phien va reset bien dem tong hop")
     parser.add_argument("--machine-name", type=str, default="", help="Ten may de dinh kem vao thong bao Telegram")
     parser.add_argument("--test-telegram", action="store_true", help="Gui tin nhan thu roi thoat")
+    parser.add_argument("--test-ocr", action="store_true", help="Chup man hinh hien tai va in chi tiet OCR debug")
     parser.add_argument("--verbose", action="store_true")
     return parser
 
@@ -1052,7 +1135,7 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(args.config)
         if args.machine_name:
             config["machine_name"] = args.machine_name
-        configure_tesseract(config)
+        configure_ocr(config)
         if args.reset_state:
             save_state(args.state, {"sessions": [], "last_daily_report_date": ""})
             print(f"✅ Da reset bien dem doanh thu va xoa du lieu phien tai: {args.state}")
@@ -1069,11 +1152,28 @@ def main(argv: list[str] | None = None) -> int:
             client.send_message(f"✅ Auto Desktop LIVE Reporter ket noi thanh cong {machine_str}luc {datetime.now():%H:%M:%S %d/%m/%Y}.")
             print("Telegram OK")
             return 0
+        if args.test_ocr:
+            set_dpi_awareness()
+            windows = find_tiktok_windows(config.get("window_title_keywords", []))
+            if not windows:
+                print(f"❌ Khong tim thay cua so TikTok LIVE Studio voi keywords: {config.get('window_title_keywords', [])}")
+                return 1
+            for hwnd, title, bbox in windows:
+                print(f"🔍 Dang quet cua so: '{title}' (bbox: {bbox})...")
+                image = capture_bbox(bbox)
+                debug_ocr_analysis(image, config, path=f"Live Window '{title}'")
+            return 0
         set_dpi_awareness()
         signal.signal(signal.SIGINT, request_stop)
         if hasattr(signal, "SIGTERM"):
             signal.signal(signal.SIGTERM, request_stop)
-        return run_daemon(config, args.state, once=args.once)
+        if not acquire_single_instance():
+            logging.info("Reporter dang chay; bo qua instance thu hai.")
+            return 0
+        try:
+            return run_daemon(config, args.state, once=args.once)
+        finally:
+            release_single_instance()
     except Exception as error:
         logging.exception("Khong the khoi dong: %s", error)
         return 1
